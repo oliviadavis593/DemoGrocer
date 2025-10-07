@@ -46,6 +46,22 @@ hundred products, traceable lots, and starting quantities in the "Backroom" and
 "Sales Floor" locations. A summary of the seeded data is written to
 `out/seed_summary.csv`.
 
+### Reporting API at a Glance
+
+Once the simulator has been seeded and is generating activity, you can start
+the lightweight reporting app located in `apps/web`. The service is built with
+FastAPI and is designed to give non-technical stakeholders a quick snapshot of
+what is happening in the inventory system:
+
+* **`/health`** – A simple status check that confirms the reporting service is
+  online and connected.
+* **`/events/recent`** – Displays a chronological table of the latest
+  simulator events, such as stock moves or adjustments, so you can monitor what
+  has happened without opening the raw log files.
+* **`/at-risk`** – Lists lots that are close to their expiry date (three days
+  by default) along with the quantity remaining, helping teams prioritize what
+  to move or sell first.
+
 ### Tests
 
 Basic unit tests are located in the `tests/` directory. Run them with:
