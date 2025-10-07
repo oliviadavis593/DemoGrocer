@@ -1,0 +1,16 @@
+# common
+.env
+.env.*
+out/
+__pycache__/
+*.pyc
+.dist/
+.DS_Store
+
+# Python
+.venv/
+.pytest_cache/
+
+# Node (if you add web UI later)
+node_modules/
+.next/
