@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Optional
 from unittest import TestCase
 from unittest.mock import patch
 
+from packages.db import EventStore
 from services.simulator.config import SimulatorConfig
 from services.simulator.events import EventWriter
 from services.simulator.scheduler import SimulatorScheduler
@@ -166,7 +167,8 @@ class SimulatorServiceTests(TestCase):
         base_path = Path(self.tmpdir.name)
         self.events_path = base_path / "events.jsonl"
         self.state_path = base_path / "state.json"
-        self.writer = EventWriter(self.events_path)
+        self.db_path = base_path / "events.db"
+        self.writer = EventWriter(self.events_path, store=EventStore(self.db_path))
         self.state = StateTracker(self.state_path, timedelta(hours=24))
 
     def tearDown(self) -> None:
@@ -227,4 +229,3 @@ class SimulatorServiceTests(TestCase):
 
         events = service.run_once(force=False)
         self.assertEqual(len(events), 4)
-

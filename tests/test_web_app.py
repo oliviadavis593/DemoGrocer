@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from apps.web import create_app
 from apps.web.data import calculate_at_risk, load_recent_events, snapshot_from_quants
+from packages.db import EventStore, InventoryEvent
+from scripts.db_migrate import run as run_migration
 from services.simulator.inventory import QuantRecord
 
 
@@ -269,3 +271,102 @@ def test_at_risk_falls_back_to_expiration_date() -> None:
     payload = resp.json()
     assert payload["meta"]["lot_expiry_field"] == "expiration_date"
     assert payload["items"][0]["default_code"] == "BAN-1"
+
+
+def test_events_endpoint_filters_by_type_and_since(tmp_path: Path) -> None:
+    db_path = tmp_path / "events.db"
+    run_migration(db_path)
+    store = EventStore(db_path)
+    now = datetime.now(timezone.utc)
+    store.add_events(
+        [
+            InventoryEvent(
+                ts=now - timedelta(days=1),
+                type="receiving",
+                product="Gala Apples",
+                lot="LOT-1",
+                qty=5.0,
+                before=10.0,
+                after=15.0,
+            ),
+            InventoryEvent(
+                ts=now - timedelta(days=5),
+                type="receiving",
+                product="Gala Apples",
+                lot="LOT-2",
+                qty=5.0,
+                before=15.0,
+                after=20.0,
+            ),
+            InventoryEvent(
+                ts=now - timedelta(days=2),
+                type="sell_down",
+                product="Whole Milk",
+                lot="LOT-3",
+                qty=-2.0,
+                before=8.0,
+                after=6.0,
+            ),
+        ]
+    )
+
+    app = create_app(
+        events_path_provider=lambda: tmp_path / "unused.jsonl",
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        event_store_provider=lambda: EventStore(db_path),
+    )
+    client = TestClient(app)
+
+    resp = client.get("/events", params={"type": "receiving", "since": "3d", "limit": 5})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["meta"]["count"] == 1
+    assert payload["meta"]["type"] == "receiving"
+    assert payload["events"][0]["product"] == "Gala Apples"
+    assert payload["events"][0]["lot"] == "LOT-1"
+
+
+def test_metrics_summary_reports_counts(tmp_path: Path) -> None:
+    db_path = tmp_path / "events.db"
+    run_migration(db_path)
+    store = EventStore(db_path)
+    now = datetime.now(timezone.utc)
+    store.add_events(
+        [
+            InventoryEvent(
+                ts=now - timedelta(hours=1),
+                type="receiving",
+                product="Gala Apples",
+                lot=None,
+                qty=5.0,
+                before=10.0,
+                after=15.0,
+            ),
+            InventoryEvent(
+                ts=now - timedelta(hours=2),
+                type="sell_down",
+                product="Whole Milk",
+                lot="LOT-3",
+                qty=-2.0,
+                before=8.0,
+                after=6.0,
+            ),
+        ]
+    )
+
+    app = create_app(
+        events_path_provider=lambda: tmp_path / "unused.jsonl",
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        event_store_provider=lambda: EventStore(db_path),
+    )
+    client = TestClient(app)
+
+    resp = client.get("/metrics/summary")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["events"]["total"] == 2
+    assert payload["events"]["by_type"]["receiving"] == 1
+    assert payload["events"]["by_type"]["sell_down"] == 1
+    assert payload["meta"]["source"] == "database"

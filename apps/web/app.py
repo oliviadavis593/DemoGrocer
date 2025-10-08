@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 
+from packages.db import EventStore
 from packages.odoo_client import OdooClient, OdooClientError
 from services.simulator.inventory import InventoryRepository
 
@@ -16,11 +19,15 @@ from .data import (
     load_recent_events,
     serialize_at_risk,
     serialize_events,
+    serialize_inventory_events,
 )
 
 EventsPathProvider = Callable[[], Path]
 RepositoryFactory = Callable[[], Optional[InventoryRepository]]
 OdooClientProvider = Callable[[], Optional[OdooClient]]
+EventStoreProvider = Callable[[], EventStore]
+
+_DURATION_RE = re.compile(r"^(?P<value>\d+)(?P<unit>[dhm])$")
 
 
 def create_app(
@@ -28,6 +35,7 @@ def create_app(
     events_path_provider: EventsPathProvider | None = None,
     repository_factory: RepositoryFactory | None = None,
     odoo_client_provider: OdooClientProvider | None = None,
+    event_store_provider: EventStoreProvider | None = None,
     logger: logging.Logger | None = None,
 ) -> FastAPI:
     """Construct the FastAPI application."""
@@ -36,6 +44,7 @@ def create_app(
     events_provider = events_path_provider or _default_events_path
     repository_provider = repository_factory or _default_repository_factory
     odoo_provider = odoo_client_provider or _default_odoo_client
+    store_provider = event_store_provider or _default_event_store
 
     app = FastAPI(title="FoodFlow Reporting API")
 
@@ -78,6 +87,56 @@ def create_app(
             return {"events": [], "meta": meta}
         meta["count"] = len(events)
         return {"events": events, "meta": meta}
+
+    @app.get("/events", response_class=JSONResponse)
+    def events(
+        limit: int = Query(100, ge=1, le=1000),
+        type: str | None = Query(None),
+        since: str | None = Query(None),
+    ) -> dict[str, object]:
+        event_type = type
+        meta: dict[str, object] = {
+            "source": "database",
+            "limit": limit,
+            "type": event_type,
+            "since": since,
+        }
+        try:
+            since_dt = _parse_since(since)
+        except ValueError as exc:
+            raise HTTPException(400, {"since": str(exc)}) from exc
+
+        try:
+            store = store_provider()
+            records = store.list_events(event_type=event_type, since=since_dt, limit=limit)
+        except Exception:
+            app_logger.exception("Failed to load events from database")
+            meta["error"] = "events_query_failed"
+            return {"events": [], "meta": meta}
+
+        payload = serialize_inventory_events(records)
+        meta["count"] = len(payload)
+        return {"events": payload, "meta": meta}
+
+    @app.get("/metrics/summary", response_class=JSONResponse)
+    def metrics_summary() -> dict[str, object]:
+        try:
+            store = store_provider()
+            summary = store.metrics_summary()
+        except Exception:
+            app_logger.exception("Failed to calculate metrics summary")
+            return {
+                "meta": {"source": "database", "error": "metrics_query_failed"},
+                "events": {"total": 0, "by_type": {}},
+            }
+
+        return {
+            "meta": {"source": "database"},
+            "events": {
+                "total": summary.get("total_events", 0),
+                "by_type": summary.get("events_by_type", {}),
+            },
+        }
 
     @app.get("/at-risk", response_class=JSONResponse)
     def at_risk(days: str = Query("3")) -> dict[str, object]:
@@ -185,10 +244,45 @@ def _resolve_expiry_field(client: OdooClient) -> str | None:
     return None
 
 
+def _parse_since(value: str | None, *, reference: datetime | None = None) -> datetime | None:
+    if value is None:
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+
+    ref = reference or datetime.now(timezone.utc)
+    match = _DURATION_RE.fullmatch(raw.lower())
+    if match:
+        amount = int(match.group("value"))
+        unit = match.group("unit")
+        if unit == "d":
+            delta = timedelta(days=amount)
+        elif unit == "h":
+            delta = timedelta(hours=amount)
+        else:
+            delta = timedelta(minutes=amount)
+        return ref - delta
+
+    try:
+        normalized = raw.replace("Z", "+00:00")
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError("Invalid duration or ISO timestamp") from exc
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _default_events_path() -> Path:
     from .data import DEFAULT_EVENTS_PATH
 
     return DEFAULT_EVENTS_PATH
+
+
+def _default_event_store() -> EventStore:
+    return EventStore()
 
 
 def _default_odoo_client() -> OdooClient | None:
