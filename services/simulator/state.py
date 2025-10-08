@@ -27,8 +27,16 @@ class StateTracker:
         except (json.JSONDecodeError, OSError):
             self._state = {}
 
-    def should_run(self, job_name: str, now: datetime, force: bool = False) -> bool:
-        if force:
+    def should_run(
+        self,
+        job_name: str,
+        now: datetime,
+        *,
+        force: bool = False,
+        minimum_interval: Optional[timedelta] = None,
+    ) -> bool:
+        interval = minimum_interval or self.minimum_interval
+        if force or interval <= timedelta(0):
             return True
         if job_name not in self._state:
             return True
@@ -38,7 +46,7 @@ class StateTracker:
             return True
         if last_run.tzinfo is None:
             last_run = last_run.replace(tzinfo=timezone.utc)
-        return now - last_run >= self.minimum_interval
+        return now - last_run >= interval
 
     def record(self, job_name: str, now: datetime) -> None:
         self._state[job_name] = now.astimezone(timezone.utc).isoformat()

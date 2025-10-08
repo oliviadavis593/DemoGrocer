@@ -38,19 +38,29 @@ class SimulatorService:
         jobs = self._build_jobs()
         all_events: List[SimulatorEvent] = []
         for job in jobs:
-            if not self.state_tracker.should_run(job.name, now, force=force):
-                continue
-            events = job.run(context)
+            if job.minimum_interval is not None:
+                if not self.state_tracker.should_run(
+                    job.name, now, force=force, minimum_interval=job.minimum_interval
+                ):
+                    continue
+                events = job.run(context)
+                self.state_tracker.record(job.name, now)
+            else:
+                events = job.run(context)
             if events:
                 all_events.extend(events)
-                self.state_tracker.record(job.name, now)
         return all_events
 
     def _build_jobs(self) -> Sequence:
         return [
             SellDownJob(self.config.sell_down, self.event_writer, self.client),
-            ReceivingJob(self.config.receiving, self.event_writer, self.client),
             DailyExpiryJob(self.config.daily_expiry, self.event_writer, self.client),
+            ReceivingJob(
+                self.config.receiving,
+                self.config.daily_expiry,
+                self.event_writer,
+                self.client,
+            ),
         ]
 
 

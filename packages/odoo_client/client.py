@@ -7,7 +7,14 @@ import pathlib
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Union
 import xmlrpc.client
-from dotenv import load_dotenv
+# ``python-dotenv`` is an optional dependency when running unit tests. The
+# simulator and web application can operate without it, so gracefully fall back
+# when the package is not installed.
+try:  # pragma: no cover - optional helper
+    from dotenv import load_dotenv
+except ModuleNotFoundError:  # pragma: no cover - optional helper
+    def load_dotenv(*_: object, **__: object) -> bool:
+        return False
 
 # Load environment variables from .env file
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -35,7 +42,7 @@ class OdooClientConfig:
         missing: List[str] = []
         env_map = {
             "url": os.getenv("ODOO_URL"),
-            "database": os.getenv("ODOO_DATABASE"),
+            "database": os.getenv("ODOO_DATABASE") or os.getenv("ODOO_DB"),
             "username": os.getenv("ODOO_USERNAME"),
             "password": os.getenv("ODOO_PASSWORD"),
         }

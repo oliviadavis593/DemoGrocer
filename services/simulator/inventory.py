@@ -35,8 +35,28 @@ class InventorySnapshot:
         return self._quants.get(quant_id)
 
     def update_quantity(self, quant_id: int, quantity: float) -> None:
-        if quant_id in self._quants:
-            self._quants[quant_id].quantity = quantity
+        self.update_quant(quant_id, quantity=quantity)
+
+    def update_quant(
+        self,
+        quant_id: int,
+        *,
+        quantity: Optional[float] = None,
+        lot_id: Optional[int] = None,
+        lot_name: Optional[str] = None,
+        life_date: Optional[date] = None,
+    ) -> None:
+        quant = self._quants.get(quant_id)
+        if not quant:
+            return
+        if quantity is not None:
+            quant.quantity = quantity
+        if lot_id is not None:
+            quant.lot_id = lot_id
+        if lot_name is not None:
+            quant.lot_name = lot_name
+        if life_date is not None:
+            quant.life_date = life_date
 
 
 class InventoryRepository:
