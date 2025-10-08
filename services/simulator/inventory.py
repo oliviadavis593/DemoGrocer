@@ -103,7 +103,7 @@ class InventoryRepository:
         if not lot_ids:
             return {}
         lots = self.client.search_read(
-            "stock.production.lot",
+            "stock.lot",
             domain=[["id", "in", list(lot_ids)]],
             fields=["id", "name", "life_date"],
         )

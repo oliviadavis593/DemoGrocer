@@ -1,11 +1,20 @@
 """Seed the FoodFlow demo inventory into Odoo via XML-RPC."""
 from __future__ import annotations
 
+import sys
+import pathlib
+
+from dotenv import load_dotenv
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+load_dotenv(ROOT / ".env")
+sys.path.insert(0, str(ROOT))
+
 import csv
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
 from packages.odoo_client import OdooClient, OdooClientError
 
@@ -222,6 +231,7 @@ class InventorySeeder:
 
     # Public API -----------------------------------------------------------------
     def run(self) -> List[SeedResult]:
+        self._assert_models()
         self._ensure_uom_categories()
         self._ensure_uoms()
         self._ensure_product_categories()
@@ -248,6 +258,19 @@ class InventorySeeder:
                 )
             )
         return results
+
+    def _assert_models(self) -> None:
+        lot_model = self.client.search_read(
+            "ir.model",
+            [("model", "=", "stock.lot")],
+            ["id"],
+            limit=1,
+        )
+        if not lot_model:
+            raise OdooClientError(
+                "Odoo Inventory app not installed in this DB (missing model 'stock.lot'). "
+                "Install Apps → Inventory."
+            )
 
     # Setup helpers --------------------------------------------------------------
     def _ensure_uom_categories(self) -> None:
@@ -333,33 +356,48 @@ class InventorySeeder:
 
     def _ensure_lot(self, product_id: int, code: str, index: int) -> int:
         lot_name = f"LOT-{code}"
-        life_date = date.today() + timedelta(days=30 + (index % 60))
         values = {
             "name": lot_name,
             "product_id": product_id,
-            "life_date": life_date.isoformat(),
         }
+        has_life = self.client.search_read(
+            "ir.model.fields",
+            [("model", "=", "stock.lot"), ("name", "=", "life_date")],
+            ["id"],
+            limit=1,
+        )
+        if has_life:
+            life_date = date.today() + timedelta(days=30 + (index % 60))
+            values["life_date"] = life_date.isoformat()
         return self._upsert_single(
-            "stock.production.lot",
+            "stock.lot",
             domain=[("name", "=", lot_name), ("product_id", "=", product_id)],
             values=values,
         )
 
-    def _ensure_quant(self, product_id: int, lot_id: int, location_id: int, quantity: float) -> int:
+    def _ensure_quant(
+        self,
+        product_id: int,
+        lot_id: Optional[int],
+        location_id: int,
+        quantity: float,
+    ) -> int:
         values = {
             "product_id": product_id,
             "location_id": location_id,
-            "lot_id": lot_id,
             "quantity": quantity,
             "reserved_quantity": 0.0,
         }
+        domain = [
+            ("product_id", "=", product_id),
+            ("location_id", "=", location_id),
+        ]
+        if lot_id is not None:
+            values["lot_id"] = lot_id
+            domain.append(("lot_id", "=", lot_id))
         return self._upsert_single(
             "stock.quant",
-            domain=[
-                ("product_id", "=", product_id),
-                ("location_id", "=", location_id),
-                ("lot_id", "=", lot_id),
-            ],
+            domain=domain,
             values=values,
         )
 
