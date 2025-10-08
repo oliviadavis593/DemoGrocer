@@ -144,7 +144,7 @@ def test_app_endpoints_render_html(tmp_path: Path) -> None:
     assert events_resp.status_code == 200
     assert "Whole Milk" in events_resp.text
 
-    risk_resp = client.get("/at-risk", params={"threshold_days": 3})
+    risk_resp = client.get("/at-risk", params={"days": 3})
     assert risk_resp.status_code == 200
     assert "Gala Apples" in risk_resp.text
     assert "At-Risk Inventory" in risk_resp.text

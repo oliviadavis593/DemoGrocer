@@ -72,14 +72,14 @@ def create_app(
 
     @app.get("/at-risk", response_class=HTMLResponse)
     def at_risk(
-        threshold_days: int = Query(3, ge=0, le=30),
+        days: int = Query(3, ge=0, le=30),
         repository: InventoryRepository = Depends(_get_repository),
     ) -> HTMLResponse:
         try:
             snapshot = repository.load_snapshot()
         except OdooClientError as exc:  # pragma: no cover - exercised in runtime usage
             raise HTTPException(status_code=502, detail=str(exc)) from exc
-        items = calculate_at_risk(snapshot, threshold_days=threshold_days)
+        items = calculate_at_risk(snapshot, threshold_days=days)
         body = _render_table(
             title="At-Risk Inventory",
             headers=["Product", "Lot", "Expiry Date", "Days Remaining", "Quantity"],
