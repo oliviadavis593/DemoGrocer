@@ -1,20 +1,188 @@
-"""FastAPI application exposing reporting endpoints."""
+"""FastAPI application exposing resilient reporting endpoints."""
 from __future__ import annotations
 
-from html import escape
+import logging
 from pathlib import Path
-from typing import Callable, Iterable, List
+from typing import Callable, Optional, Tuple
 
-from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse
 
 from packages.odoo_client import OdooClient, OdooClientError
 from services.simulator.inventory import InventoryRepository
 
-from .data import calculate_at_risk, load_recent_events
+from .data import (
+    calculate_at_risk,
+    load_recent_events,
+    serialize_at_risk,
+    serialize_events,
+)
 
 EventsPathProvider = Callable[[], Path]
-RepositoryFactory = Callable[[], InventoryRepository]
+RepositoryFactory = Callable[[], Optional[InventoryRepository]]
+OdooClientProvider = Callable[[], Optional[OdooClient]]
+
+
+def create_app(
+    *,
+    events_path_provider: EventsPathProvider | None = None,
+    repository_factory: RepositoryFactory | None = None,
+    odoo_client_provider: OdooClientProvider | None = None,
+    logger: logging.Logger | None = None,
+) -> FastAPI:
+    """Construct the FastAPI application."""
+
+    app_logger = logger or logging.getLogger("foodflow.web")
+    events_provider = events_path_provider or _default_events_path
+    repository_provider = repository_factory or _default_repository_factory
+    odoo_provider = odoo_client_provider or _default_odoo_client
+
+    app = FastAPI(title="FoodFlow Reporting API")
+
+    @app.exception_handler(Exception)
+    def _handle_unexpected(exc: Exception) -> JSONResponse:
+        app_logger.error("Unhandled application error", exc_info=True)
+        return JSONResponse(
+            {"error": "internal", "detail": "see server logs"},
+            status_code=500,
+        )
+
+    @app.get("/health", response_class=JSONResponse)
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/events/recent", response_class=JSONResponse)
+    def recent_events(limit: str = Query("100")) -> dict[str, object]:
+        limit_value, clamped = _coerce_int(limit, default=100, minimum=1, maximum=1000)
+        events_path = events_provider()
+        exists = events_path.exists()
+        meta: dict[str, object] = {
+            "source": "jsonl",
+            "limit": limit_value,
+            "exists": exists,
+            "clamped": clamped,
+        }
+        if not exists:
+            app_logger.info("Events file %s not found; returning empty result", events_path)
+            return {"events": [], "meta": meta}
+        try:
+            records = load_recent_events(events_path, limit=limit_value)
+            events = serialize_events(records)
+        except ValueError:
+            app_logger.exception("Failed to parse events file %s", events_path)
+            meta["error"] = "invalid_events_json"
+            return {"events": [], "meta": meta}
+        except OSError:
+            app_logger.exception("Failed to read events file %s", events_path)
+            meta["error"] = "events_read_failed"
+            return {"events": [], "meta": meta}
+        meta["count"] = len(events)
+        return {"events": events, "meta": meta}
+
+    @app.get("/at-risk", response_class=JSONResponse)
+    def at_risk(days: str = Query("3")) -> dict[str, object]:
+        days_value, clamped = _coerce_int(days, default=3, minimum=1, maximum=30)
+        meta: dict[str, object] = {"days": days_value, "clamped": clamped}
+
+        client = odoo_provider()
+        if client is None:
+            meta["error"] = "odoo_unreachable"
+            app_logger.error("Odoo client unavailable; returning empty at-risk list")
+            return {"items": [], "meta": meta}
+
+        try:
+            if not _model_exists(client, "stock.lot"):
+                meta["reason"] = "no_stock_lot_model"
+                return {"items": [], "meta": meta}
+            expiry_field = _resolve_expiry_field(client)
+            if expiry_field is None:
+                meta["reason"] = "no_expiry_field"
+                return {"items": [], "meta": meta}
+            meta["lot_expiry_field"] = expiry_field
+        except OdooClientError:
+            meta["error"] = "odoo_unreachable"
+            app_logger.exception("Failed to query Odoo metadata")
+            return {"items": [], "meta": meta}
+
+        repository = repository_provider()
+        if repository is None:
+            meta["error"] = "odoo_unreachable"
+            app_logger.error("Inventory repository unavailable; returning empty at-risk list")
+            return {"items": [], "meta": meta}
+        if hasattr(repository, "set_lot_expiry_field"):
+            try:
+                repository.set_lot_expiry_field(expiry_field)
+            except Exception:
+                app_logger.exception("Failed to configure repository with expiry field")
+
+        try:
+            snapshot = repository.load_snapshot()
+        except OdooClientError:
+            meta["error"] = "odoo_unreachable"
+            app_logger.exception("Failed to load inventory snapshot")
+            return {"items": [], "meta": meta}
+        except Exception:
+            meta["error"] = "odoo_unreachable"
+            app_logger.exception("Unexpected error loading inventory snapshot")
+            return {"items": [], "meta": meta}
+
+        items = calculate_at_risk(snapshot, threshold_days=days_value)
+        payload = serialize_at_risk(items)
+        meta["count"] = len(payload)
+        return {"items": payload, "meta": meta}
+
+    return app
+
+
+def _coerce_int(
+    raw_value: object,
+    *,
+    default: int,
+    minimum: int,
+    maximum: int,
+) -> Tuple[int, bool]:
+    value = default
+    clamped = False
+    if raw_value not in (None, ""):
+        try:
+            value = int(raw_value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            clamped = True
+            value = default
+    if value < minimum:
+        clamped = True
+        value = minimum
+    if value > maximum:
+        clamped = True
+        value = maximum
+    return value, clamped
+
+
+def _model_exists(client: OdooClient, model: str) -> bool:
+    result = client.search_read(
+        "ir.model",
+        domain=[["model", "=", model]],
+        fields=["id"],
+        limit=1,
+    )
+    return bool(result)
+
+
+def _field_exists(client: OdooClient, model: str, field: str) -> bool:
+    result = client.search_read(
+        "ir.model.fields",
+        domain=[["model", "=", model], ["name", "=", field]],
+        fields=["id"],
+        limit=1,
+    )
+    return bool(result)
+
+
+def _resolve_expiry_field(client: OdooClient) -> str | None:
+    for field in ("life_date", "expiration_date"):
+        if _field_exists(client, "stock.lot", field):
+            return field
+    return None
 
 
 def _default_events_path() -> Path:
@@ -23,115 +191,25 @@ def _default_events_path() -> Path:
     return DEFAULT_EVENTS_PATH
 
 
-def _default_repository_factory() -> InventoryRepository:
-    client = OdooClient()
-    client.authenticate()
+def _default_odoo_client() -> OdooClient | None:
+    logger = logging.getLogger("foodflow.web")
+    try:
+        client = OdooClient()
+        client.authenticate()
+        return client
+    except OdooClientError:
+        logger.exception("Failed to authenticate default Odoo client")
+        return None
+    except Exception:
+        logger.exception("Unexpected error creating default Odoo client")
+        return None
+
+
+def _default_repository_factory() -> InventoryRepository | None:
+    client = _default_odoo_client()
+    if client is None:
+        return None
     return InventoryRepository(client)
-
-
-def create_app(
-    *,
-    events_path_provider: EventsPathProvider | None = None,
-    repository_factory: RepositoryFactory | None = None,
-) -> FastAPI:
-    """Construct the FastAPI application."""
-
-    app = FastAPI(title="FoodFlow Reporting API")
-
-    app.dependency_overrides[_get_events_path] = events_path_provider or _default_events_path
-    app.dependency_overrides[_get_repository] = repository_factory or _default_repository_factory
-
-    @app.get("/health", response_class=JSONResponse)
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
-
-    @app.get("/events/recent", response_class=HTMLResponse)
-    def recent_events(
-        limit: int = Query(20, ge=1, le=200),
-        events_path: Path = Depends(_get_events_path),
-    ) -> HTMLResponse:
-        records = load_recent_events(events_path, limit=limit)
-        body = _render_table(
-            title="Recent Events",
-            headers=["Timestamp", "Type", "Product", "Lot", "Quantity", "Before", "After"],
-            rows=[
-                [
-                    escape(record.ts.isoformat()),
-                    escape(record.type or ""),
-                    escape(record.product or ""),
-                    escape(record.lot or ""),
-                    f"{record.qty:+.2f}",
-                    f"{record.before:.2f}",
-                    f"{record.after:.2f}",
-                ]
-                for record in records
-            ],
-            empty_message="No events have been recorded yet.",
-        )
-        return HTMLResponse(content=body)
-
-    @app.get("/at-risk", response_class=HTMLResponse)
-    def at_risk(
-        days: int = Query(3, ge=0, le=30),
-        repository: InventoryRepository = Depends(_get_repository),
-    ) -> HTMLResponse:
-        try:
-            snapshot = repository.load_snapshot()
-        except OdooClientError as exc:  # pragma: no cover - exercised in runtime usage
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
-        items = calculate_at_risk(snapshot, threshold_days=days)
-        body = _render_table(
-            title="At-Risk Inventory",
-            headers=["Product", "Lot", "Expiry Date", "Days Remaining", "Quantity"],
-            rows=[
-                [
-                    escape(item.product),
-                    escape(item.lot or ""),
-                    escape(item.life_date.isoformat()),
-                    str(item.days_until),
-                    f"{item.quantity:.2f}",
-                ]
-                for item in items
-            ],
-            empty_message="No inventory items are within the risk window.",
-        )
-        return HTMLResponse(content=body)
-
-    return app
-
-
-def _get_events_path(provider: EventsPathProvider = Depends(_default_events_path)) -> Path:
-    return provider()
-
-
-def _get_repository(
-    factory: RepositoryFactory = Depends(_default_repository_factory),
-) -> InventoryRepository:
-    return factory()
-
-
-def _render_table(
-    *, title: str, headers: Iterable[str], rows: Iterable[Iterable[str]], empty_message: str
-) -> str:
-    header_list = [escape(header) for header in headers]
-    rendered_rows: List[str] = []
-    for row in rows:
-        rendered_cells = "".join(f"<td>{cell}</td>" for cell in row)
-        rendered_rows.append(f"<tr>{rendered_cells}</tr>")
-    rows_html = "".join(rendered_rows)
-    if not rows_html:
-        rows_html = f"<tr><td colspan='{len(header_list)}'>{escape(empty_message)}</td></tr>"
-    header_html = "".join(f"<th>{header}</th>" for header in header_list)
-    title_html = escape(title)
-    table_html = (
-        f"<html><head><title>{title_html}</title>"
-        "<style>table{border-collapse:collapse;}th,td{border:1px solid #ccc;padding:4px;}</style>"
-        "</head><body>"
-        f"<h1>{title_html}</h1>"
-        f"<table><thead><tr>{header_html}</tr></thead><tbody>{rows_html}</tbody></table>"
-        "</body></html>"
-    )
-    return table_html
 
 
 __all__ = ["create_app"]

@@ -15,6 +15,7 @@ class QuantRecord:
     id: int
     product_id: int
     product_name: str
+    default_code: Optional[str]
     category: str
     quantity: float
     lot_id: Optional[int]
@@ -62,8 +63,15 @@ class InventorySnapshot:
 class InventoryRepository:
     """Fetch and hydrate inventory information from Odoo."""
 
-    def __init__(self, client: OdooClient) -> None:
+    def __init__(self, client: OdooClient, lot_expiry_field: Optional[str] = None) -> None:
         self.client = client
+        self._lot_expiry_field: Optional[str] = lot_expiry_field
+
+    def set_lot_expiry_field(self, field: Optional[str]) -> None:
+        self._lot_expiry_field = field
+
+    def get_lot_expiry_field(self) -> Optional[str]:
+        return self._lot_expiry_field
 
     def load_snapshot(self) -> InventorySnapshot:
         quant_records = self.client.search_read(
@@ -92,6 +100,7 @@ class InventoryRepository:
                     id=quant_id,
                     product_id=product_id,
                     product_name=product.get("name", f"Product {product_id}"),
+                    default_code=product.get("default_code"),
                     category=category,
                     quantity=float(record.get("quantity", 0.0) or 0.0),
                     lot_id=lot_id,
@@ -107,7 +116,7 @@ class InventoryRepository:
         products = self.client.search_read(
             "product.product",
             domain=[["id", "in", list(product_ids)]],
-            fields=["id", "name", "categ_id"],
+            fields=["id", "name", "categ_id", "default_code"],
         )
         output: Dict[int, Dict[str, object]] = {}
         for product in products:
@@ -115,6 +124,7 @@ class InventoryRepository:
             category_name = _resolve_relational_name(product.get("categ_id")) or "Unknown"
             output[product_id] = {
                 "name": product.get("name", f"Product {product_id}"),
+                "default_code": product.get("default_code"),
                 "category": category_name,
             }
         return output
@@ -122,11 +132,42 @@ class InventoryRepository:
     def _load_lots(self, lot_ids: Sequence[int]) -> Dict[int, Dict[str, object]]:
         if not lot_ids:
             return {}
-        lots = self.client.search_read(
-            "stock.lot",
-            domain=[["id", "in", list(lot_ids)]],
-            fields=["id", "name", "expiration_date", "life_date"],
-        )
+        fields_base = ["id", "name"]
+        candidate_fields: List[str] = []
+        if self._lot_expiry_field:
+            candidate_fields.append(self._lot_expiry_field)
+        for field in ("life_date", "expiration_date"):
+            if field not in candidate_fields:
+                candidate_fields.append(field)
+
+        lots_response: Optional[List[Dict[str, object]]] = None
+        for field in candidate_fields:
+            field_list = fields_base.copy()
+            if field not in field_list:
+                field_list.append(field)
+            try:
+                lots_response = self.client.search_read(
+                    "stock.lot",
+                    domain=[["id", "in", list(lot_ids)]],
+                    fields=field_list,
+                )
+            except Exception as exc:
+                message = str(exc)
+                if "Invalid field" in message and field in ("life_date", "expiration_date"):
+                    continue
+                raise
+            else:
+                self._lot_expiry_field = field
+                break
+
+        if lots_response is None:
+            lots_response = self.client.search_read(
+                "stock.lot",
+                domain=[["id", "in", list(lot_ids)]],
+                fields=fields_base,
+            )
+            self._lot_expiry_field = None
+        lots = lots_response
         output: Dict[int, Dict[str, object]] = {}
         for lot in lots:
             lot_id = int(lot["id"])

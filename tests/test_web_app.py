@@ -58,6 +58,7 @@ def test_calculate_at_risk_filters_by_threshold() -> None:
                 id=1,
                 product_id=101,
                 product_name="Gala Apples",
+                default_code="FF-101",
                 category="Produce",
                 quantity=12.5,
                 lot_id=201,
@@ -68,6 +69,7 @@ def test_calculate_at_risk_filters_by_threshold() -> None:
                 id=2,
                 product_id=102,
                 product_name="Whole Milk",
+                default_code="FF-102",
                 category="Dairy",
                 quantity=0.0,
                 lot_id=202,
@@ -78,6 +80,7 @@ def test_calculate_at_risk_filters_by_threshold() -> None:
                 id=3,
                 product_id=103,
                 product_name="Cheddar",
+                default_code="FF-103",
                 category="Dairy",
                 quantity=4.0,
                 lot_id=203,
@@ -90,10 +93,11 @@ def test_calculate_at_risk_filters_by_threshold() -> None:
     results = calculate_at_risk(snapshot, today=date(2024, 1, 10), threshold_days=3)
     assert len(results) == 1
     assert results[0].product == "Gala Apples"
+    assert results[0].default_code == "FF-101"
     assert results[0].days_until == 2
 
 
-def test_app_endpoints_render_html(tmp_path: Path) -> None:
+def test_app_endpoints_return_json(tmp_path: Path) -> None:
     events_path = tmp_path / "events.jsonl"
     entries = [
         {
@@ -117,6 +121,7 @@ def test_app_endpoints_render_html(tmp_path: Path) -> None:
                 id=1,
                 product_id=101,
                 product_name="Gala Apples",
+                default_code="FF-101",
                 category="Produce",
                 quantity=5.0,
                 lot_id=201,
@@ -127,12 +132,27 @@ def test_app_endpoints_render_html(tmp_path: Path) -> None:
     )
 
     class FakeRepository:
+        def __init__(self) -> None:
+            self.expiry_field = None
+
+        def set_lot_expiry_field(self, field):
+            self.expiry_field = field
+
         def load_snapshot(self):
             return snapshot
+
+    class FakeOdooClient:
+        def search_read(self, model, domain, fields=None, limit=None, order=None):
+            if model == "ir.model" and domain == [["model", "=", "stock.lot"]]:
+                return [{"id": 1}]
+            if model == "ir.model.fields" and ["name", "=", "life_date"] in domain:
+                return [{"id": 1}]
+            raise AssertionError(f"Unexpected call: {model}, {domain}")
 
     app = create_app(
         events_path_provider=lambda: events_path,
         repository_factory=lambda: FakeRepository(),
+        odoo_client_provider=lambda: FakeOdooClient(),
     )
     client = TestClient(app)
 
@@ -142,9 +162,110 @@ def test_app_endpoints_render_html(tmp_path: Path) -> None:
 
     events_resp = client.get("/events/recent")
     assert events_resp.status_code == 200
-    assert "Whole Milk" in events_resp.text
+    events_payload = events_resp.json()
+    assert events_payload["meta"]["exists"] is True
+    assert events_payload["events"][0]["product"] == "Whole Milk"
 
     risk_resp = client.get("/at-risk", params={"days": 3})
     assert risk_resp.status_code == 200
-    assert "Gala Apples" in risk_resp.text
-    assert "At-Risk Inventory" in risk_resp.text
+    risk_payload = risk_resp.json()
+    assert risk_payload["meta"]["days"] == 3
+    assert risk_payload["meta"]["lot_expiry_field"] == "life_date"
+    assert risk_payload["items"][0]["product"] == "Gala Apples"
+    assert risk_payload["items"][0]["default_code"] == "FF-101"
+
+
+def test_recent_events_handles_missing_file(tmp_path: Path) -> None:
+    missing_path = tmp_path / "missing.jsonl"
+
+    app = create_app(
+        events_path_provider=lambda: missing_path,
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+    )
+    client = TestClient(app)
+
+    resp = client.get("/events/recent", params={"limit": "bogus"})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["events"] == []
+    assert payload["meta"]["exists"] is False
+    assert payload["meta"]["clamped"] is True
+    assert payload["meta"]["limit"] == 100
+
+
+def test_at_risk_reports_missing_field() -> None:
+    class MissingLifeDateClient:
+        def search_read(self, model, domain, fields=None, limit=None, order=None):
+            if model == "ir.model" and domain == [["model", "=", "stock.lot"]]:
+                return [{"id": 1}]
+            if model == "ir.model.fields":
+                return []
+            raise AssertionError(f"Unexpected call: {model}, {domain}")
+
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: MissingLifeDateClient(),
+    )
+    client = TestClient(app)
+
+    resp = client.get("/at-risk", params={"days": -5})
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["items"] == []
+    assert payload["meta"]["reason"] == "no_expiry_field"
+    assert payload["meta"]["clamped"] is True
+    assert payload["meta"]["days"] == 1
+
+
+def test_at_risk_falls_back_to_expiration_date() -> None:
+    class ExpirationDateClient:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def search_read(self, model, domain, fields=None, limit=None, order=None):
+            if model == "ir.model":
+                return [{"id": 1}]
+            if model == "ir.model.fields":
+                # Simulate only expiration_date existing
+                if ["name", "=", "life_date"] in domain:
+                    return []
+                if ["name", "=", "expiration_date"] in domain:
+                    return [{"id": 2}]
+            raise AssertionError(f"Unexpected call: {model}, {domain}")
+
+    class FakeRepository:
+        def __init__(self) -> None:
+            self.expiry_field = None
+
+        def set_lot_expiry_field(self, field):
+            self.expiry_field = field
+
+        def load_snapshot(self):
+            return snapshot_from_quants(
+                [
+                    QuantRecord(
+                        id=1,
+                        product_id=101,
+                        product_name="Bananas",
+                        default_code="BAN-1",
+                        category="Produce",
+                        quantity=10.0,
+                        lot_id=5,
+                        lot_name="LOT-BAN",
+                        life_date=date(2024, 1, 15),
+                    )
+                ]
+            )
+
+    app = create_app(
+        repository_factory=lambda: FakeRepository(),
+        odoo_client_provider=lambda: ExpirationDateClient(),
+    )
+    client = TestClient(app)
+
+    resp = client.get("/at-risk")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["meta"]["lot_expiry_field"] == "expiration_date"
+    assert payload["items"][0]["default_code"] == "BAN-1"

@@ -1,0 +1,12 @@
+# Changelog
+All notable changes to this project will be documented in this file.
+
+## [Unreleased]
+
+## [0.1.0] - 2025-10-08
+### Added
+- Idempotent inventory seeding script that provisions UoM categories, products, lots, and summary exports for FoodFlow demos.
+- Simulator services covering sell-down, receiving, and expiry jobs with inventory snapshots and JSONL event logging.
+- Lightweight XML-RPC `OdooClient` package with environment-driven configuration shared by scripts, simulator, and API.
+- FastAPI-based reporting app with `/health`, `/events/recent`, and `/at-risk` endpoints plus CLI for launching the server.
+- Supporting developer ergonomics including `.env` scaffolding, Makefile tasks, and pytest coverage for core utilities.

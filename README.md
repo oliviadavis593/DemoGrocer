@@ -48,19 +48,38 @@ hundred products, traceable lots, and starting quantities in the "Backroom" and
 
 ### Reporting API at a Glance
 
-Once the simulator has been seeded and is generating activity, you can start
-the lightweight reporting app located in `apps/web`. The service is built with
-FastAPI and is designed to give non-technical stakeholders a quick snapshot of
-what is happening in the inventory system:
+Once the simulator has been seeded and is generating activity, start the
+lightweight reporting app located in `apps/web`. The service loads environment
+variables from `.env`, authenticates to Odoo once on boot, and exposes JSON
+endpoints suitable for scripting or quick spot checks:
 
-* **`/health`** – A simple status check that confirms the reporting service is
-  online and connected.
-* **`/events/recent`** – Displays a chronological table of the latest
-  simulator events, such as stock moves or adjustments, so you can monitor what
-  has happened without opening the raw log files.
-* **`/at-risk`** – Lists lots that are close to their expiry date (three days
-  by default) along with the quantity remaining, helping teams prioritize what
-  to move or sell first.
+```bash
+# Install the minimal dependencies for the web layer
+python -m pip install -r requirements.txt
+
+# Launch the API
+PYTHONPATH=. python3 -m apps.web.main
+```
+
+Example requests:
+
+```bash
+curl -s http://localhost:8000/health
+# {"status":"ok"}
+
+curl -s "http://localhost:8000/events/recent?limit=5"
+# {"events":[{"ts":"...","type":"sell_down",...}], "meta":{"source":"jsonl","limit":5,"exists":true}}
+
+curl -s "http://localhost:8000/at-risk?days=3"
+# {"items":[{"default_code":"FF101","product":"Whole Milk","lot":"LOT-FF101","days_left":2,"quantity":5.0}],
+#  "meta":{"days":3,"count":1}}
+```
+
+If `out/events.jsonl` is missing or contains invalid JSON, the API returns
+`{"events": [], "meta": {"exists": false, "error": "..."} }` with a 200
+status. The `/at-risk` endpoint performs capability checks against Odoo
+(`stock.lot` model and the `life_date` field) and falls back to informative
+metadata (for example `{"reason": "no_life_date_field"}`) instead of erroring.
 
 ### Tests
 

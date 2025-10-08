@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Mapping, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Tuple
+from urllib.parse import parse_qs
 
 from . import responses
 
@@ -50,6 +51,7 @@ class FastAPI:
         self.title = title or "FastAPI"
         self.routes: Dict[RouteKey, Route] = {}
         self.dependency_overrides: Dict[Callable[..., Any], Callable[..., Any]] = {}
+        self.exception_handlers: Dict[type[BaseException], Callable[[BaseException], Any]] = {}
 
     # Route registration -----------------------------------------------------------------
     def get(self, path: str, *, response_class: Optional[type] = None) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -114,13 +116,94 @@ class FastAPI:
     def _handle_request(self, method: str, path: str, params: Optional[Mapping[str, Any]] = None) -> responses.ClientResponse:
         route = self.routes.get((path, method.upper()))
         if not route:
-            raise HTTPException(404, "Not found")
+            response = responses.JSONResponse(content={"detail": "Not found"}, status_code=404)
+            return responses.ClientResponse.from_response(response)
         try:
             result = self._call(route.handler, params)
             response = self._build_response(result, route.response_class)
         except HTTPException as exc:
             response = responses.JSONResponse(content={"detail": exc.detail}, status_code=exc.status_code)
+        except Exception as exc:
+            handler = self._find_exception_handler(exc)
+            if handler is None:
+                raise
+            result = handler(exc)
+            if isinstance(result, responses.Response):
+                response = result
+            elif isinstance(result, Mapping):
+                response = responses.JSONResponse(content=result)
+            else:
+                response = responses.HTMLResponse(content=str(result))
         return responses.ClientResponse.from_response(response)
+
+    async def __call__(
+        self,
+        scope: Mapping[str, Any],
+        receive: Callable[[], Awaitable[Mapping[str, Any]]],
+        send: Callable[[Mapping[str, Any]], Awaitable[None]],
+    ) -> None:
+        scope_type = scope.get("type")
+
+        if scope_type == "lifespan":
+            while True:
+                message = await receive()
+                message_type = message["type"]
+                if message_type == "lifespan.startup":
+                    await send({"type": "lifespan.startup.complete"})
+                elif message_type == "lifespan.shutdown":
+                    await send({"type": "lifespan.shutdown.complete"})
+                    return
+            return
+
+        if scope_type != "http":
+            raise RuntimeError(f"Unsupported ASGI scope type: {scope_type}")
+
+        method = scope.get("method", "GET").upper()
+        path = scope.get("path", "/")
+        raw_query = scope.get("query_string", b"")
+        query_params = {}
+        if raw_query:
+            parsed = parse_qs(raw_query.decode())
+            query_params = {key: values[-1] for key, values in parsed.items() if values}
+
+        try:
+            client_response = self._handle_request(method, path, query_params)
+            body = client_response.text.encode("utf-8")
+            status_code = client_response.status_code
+            media_type = client_response.media_type.encode("latin-1")
+        except Exception:
+            body = b"Internal Server Error"
+            status_code = 500
+            media_type = b"text/plain"
+
+        headers = [
+            (b"content-type", media_type),
+            (b"content-length", str(len(body)).encode("latin-1")),
+        ]
+
+        await send({"type": "http.response.start", "status": status_code, "headers": headers})
+        await send({"type": "http.response.body", "body": body, "more_body": False})
+
+    # Exception handling -----------------------------------------------------------
+    def add_exception_handler(
+        self, exc_type: type[BaseException], handler: Callable[[BaseException], Any]
+    ) -> None:
+        self.exception_handlers[exc_type] = handler
+
+    def exception_handler(
+        self, exc_type: type[BaseException]
+    ) -> Callable[[Callable[[BaseException], Any]], Callable[[BaseException], Any]]:
+        def decorator(func: Callable[[BaseException], Any]) -> Callable[[BaseException], Any]:
+            self.add_exception_handler(exc_type, func)
+            return func
+
+        return decorator
+
+    def _find_exception_handler(self, exc: BaseException) -> Optional[Callable[[BaseException], Any]]:
+        for exc_type, handler in self.exception_handlers.items():
+            if isinstance(exc, exc_type):
+                return handler
+        return None
 
 
 __all__ = ["FastAPI", "Depends", "HTTPException", "Query"]

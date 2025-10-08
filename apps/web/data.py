@@ -1,12 +1,14 @@
 """Data loading utilities for the reporting web app."""
 from __future__ import annotations
 
+import heapq
+import itertools
 import json
 import os
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import Iterable, List, Mapping
+from typing import Iterable, List, Mapping, Sequence, Tuple
 
 from services.simulator.inventory import InventorySnapshot, QuantRecord
 
@@ -24,6 +26,17 @@ class EventRecord:
     qty: float
     before: float
     after: float
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "ts": self.ts.isoformat(),
+            "type": self.type,
+            "product": self.product,
+            "lot": self.lot,
+            "qty": self.qty,
+            "before": self.before,
+            "after": self.after,
+        }
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, object]) -> "EventRecord | None":
@@ -50,10 +63,21 @@ class AtRiskItem:
     """Inventory item approaching or past expiry."""
 
     product: str
+    default_code: str | None
     lot: str | None
     life_date: date
     days_until: int
     quantity: float
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "default_code": self.default_code,
+            "product": self.product,
+            "lot": self.lot,
+            "life_date": self.life_date.isoformat(),
+            "days_left": self.days_until,
+            "quantity": self.quantity,
+        }
 
 
 def load_recent_events(path: Path | None = None, limit: int = 20) -> List[EventRecord]:
@@ -62,26 +86,37 @@ def load_recent_events(path: Path | None = None, limit: int = 20) -> List[EventR
     events_path = path or DEFAULT_EVENTS_PATH
     if limit <= 0:
         return []
-    payloads: List[EventRecord] = []
     if not events_path.exists():
         return []
-    with events_path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                payload = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(payload, Mapping):
-                continue
-            record = EventRecord.from_mapping(payload)
-            if record is None:
-                continue
-            payloads.append(record)
-    payloads.sort(key=lambda record: record.ts, reverse=True)
-    return payloads[:limit]
+
+    heap: List[Tuple[datetime, int, EventRecord]] = []
+    counter = itertools.count()
+
+    try:
+        with events_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Failed to parse JSON in {events_path}") from exc
+                if not isinstance(payload, Mapping):
+                    continue
+                record = EventRecord.from_mapping(payload)
+                if record is None:
+                    continue
+                entry = (record.ts, next(counter), record)
+                if len(heap) < limit:
+                    heapq.heappush(heap, entry)
+                else:
+                    heapq.heappushpop(heap, entry)
+    except OSError as exc:
+        raise OSError(f"Failed to read events file {events_path}") from exc
+
+    ordered = sorted(heap, key=lambda item: item[0], reverse=True)
+    return [item[2] for item in ordered]
 
 
 def calculate_at_risk(
@@ -105,6 +140,7 @@ def calculate_at_risk(
         items.append(
             AtRiskItem(
                 product=quant.product_name,
+                default_code=quant.default_code,
                 lot=quant.lot_name,
                 life_date=quant.life_date,
                 days_until=days_until,
@@ -121,10 +157,20 @@ def snapshot_from_quants(quants: Iterable[QuantRecord]) -> InventorySnapshot:
     return InventorySnapshot(quants)
 
 
+def serialize_events(records: Sequence[EventRecord]) -> List[dict[str, object]]:
+    return [record.to_dict() for record in records]
+
+
+def serialize_at_risk(items: Sequence[AtRiskItem]) -> List[dict[str, object]]:
+    return [item.to_dict() for item in items]
+
+
 __all__ = [
     "AtRiskItem",
     "EventRecord",
     "calculate_at_risk",
     "load_recent_events",
+    "serialize_at_risk",
+    "serialize_events",
     "snapshot_from_quants",
 ]
