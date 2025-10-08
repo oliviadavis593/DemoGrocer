@@ -146,7 +146,7 @@ class ReceivingJob(BaseJob):
             {
                 "name": lot_name,
                 "product_id": quant.product_id,
-                "life_date": life_date.isoformat(),
+                "expiration_date": life_date.isoformat(),
             },
         )
         return lot_id, lot_name, life_date
@@ -155,13 +155,13 @@ class ReceivingJob(BaseJob):
         records = self.client.search_read(
             "stock.lot",
             domain=[["name", "=", lot_name]],
-            fields=["id", "life_date"],
+            fields=["id", "expiration_date"],
         )
         if not records:
             return None
         record = records[0]
         lot_id = int(record["id"])
-        life_date = _parse_date(record.get("life_date"))
+        life_date = _parse_date(record.get("expiration_date"))
         return lot_id, life_date
 
     def _generate_lot_name(self, product_name: str, product_id: int, now: datetime) -> str:
@@ -205,14 +205,15 @@ class DailyExpiryJob(BaseJob):
                 continue
             self.client.write("stock.quant", quant.id, {"quantity": after})
             context.snapshot.update_quantity(quant.id, after)
-            if quant.lot_id is not None:
-                lot_updates = {}
-                if after <= 0:
-                    lot_updates["expiration_state"] = "expired"
-                elif days_until < window:
-                    lot_updates["expiration_state"] = "near_expiry"
-                if lot_updates:
-                    self.client.write("stock.lot", quant.lot_id, lot_updates)
+            # Note: expiration_state field not available in this Odoo instance
+            # if quant.lot_id is not None:
+            #     lot_updates = {}
+            #     if after <= 0:
+            #         lot_updates["expiration_state"] = "expired"
+            #     elif days_until < window:
+            #         lot_updates["expiration_state"] = "near_expiry"
+            #     if lot_updates:
+            #         self.client.write("stock.lot", quant.lot_id, lot_updates)
             events.append(
                 SimulatorEvent(
                     ts=context.now,

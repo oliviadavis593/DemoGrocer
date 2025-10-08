@@ -125,12 +125,12 @@ class InventoryRepository:
         lots = self.client.search_read(
             "stock.lot",
             domain=[["id", "in", list(lot_ids)]],
-            fields=["id", "name", "life_date"],
+            fields=["id", "name", "expiration_date"],
         )
         output: Dict[int, Dict[str, object]] = {}
         for lot in lots:
             lot_id = int(lot["id"])
-            life_date = _parse_date(lot.get("life_date"))
+            life_date = _parse_date(lot.get("expiration_date"))
             output[lot_id] = {
                 "name": lot.get("name", f"Lot {lot_id}"),
                 "life_date": life_date,

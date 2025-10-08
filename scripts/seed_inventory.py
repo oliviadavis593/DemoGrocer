@@ -362,13 +362,13 @@ class InventorySeeder:
         }
         has_life = self.client.search_read(
             "ir.model.fields",
-            [("model", "=", "stock.lot"), ("name", "=", "life_date")],
+            [("model", "=", "stock.lot"), ("name", "=", "expiration_date")],
             ["id"],
             limit=1,
         )
         if has_life:
             life_date = date.today() + timedelta(days=30 + (index % 60))
-            values["life_date"] = life_date.isoformat()
+            values["expiration_date"] = life_date.isoformat()
         return self._upsert_single(
             "stock.lot",
             domain=[("name", "=", lot_name), ("product_id", "=", product_id)],
