@@ -2,9 +2,18 @@
 from __future__ import annotations
 
 import os
+import sys
+import pathlib
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Union
 import xmlrpc.client
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+load_dotenv(ROOT / ".env")
+# Make "packages/..." importable
+sys.path.insert(0, str(ROOT))
 
 
 class OdooClientError(RuntimeError):
@@ -26,7 +35,7 @@ class OdooClientConfig:
         missing: List[str] = []
         env_map = {
             "url": os.getenv("ODOO_URL"),
-            "database": os.getenv("ODOO_DB"),
+            "database": os.getenv("ODOO_DATABASE"),
             "username": os.getenv("ODOO_USERNAME"),
             "password": os.getenv("ODOO_PASSWORD"),
         }
