@@ -28,6 +28,7 @@ class FakeOdooClient:
         self._products = products
         self._lots = lots
         self.write_calls: List[Dict[str, object]] = []
+        self.create_calls: List[Dict[str, object]] = []
 
     def authenticate(self) -> int:  # pragma: no cover - compatibility only
         return 1
@@ -46,16 +47,37 @@ class FakeOdooClient:
             records = [self._products[i] for i in ids if i in self._products]
             return [self._select_fields(record, fields) for record in records]
         if model == "stock.lot":
-            ids = _extract_ids_from_domain(domain)
-            records = [self._lots[i] for i in ids if i in self._lots]
+            records = list(self._lots.values())
+            records = [r for r in records if _matches_domain(r, domain)]
             return [self._select_fields(record, fields) for record in records]
         raise AssertionError(f"Unexpected model {model}")
 
     def write(self, model: str, record_id: int, values: Dict[str, object]) -> bool:
-        assert model == "stock.quant"
-        self.write_calls.append({"model": model, "id": record_id, "values": dict(values)})
-        self._quants[record_id].update(values)
-        return True
+        payload = {"model": model, "id": record_id, "values": dict(values)}
+        self.write_calls.append(payload)
+        if model == "stock.quant":
+            if "lot_id" in values:
+                lot_id = int(values["lot_id"])
+                lot_name = self._lots[lot_id]["name"]
+                self._quants[record_id]["lot_id"] = [lot_id, lot_name]
+            if "quantity" in values:
+                self._quants[record_id]["quantity"] = values["quantity"]
+            return True
+        if model == "stock.lot":
+            self._lots[record_id].update(values)
+            return True
+        raise AssertionError(f"Unexpected model {model}")
+
+    def create(self, model: str, values: Dict[str, object]) -> int:
+        payload = {"model": model, "values": dict(values)}
+        self.create_calls.append(payload)
+        if model == "stock.lot":
+            new_id = max(self._lots, default=200) + 1
+            record = dict(values)
+            record["id"] = new_id
+            self._lots[new_id] = record
+            return new_id
+        raise AssertionError(f"Unexpected create model {model}")
 
     def _select_fields(
         self, record: Dict[str, object], fields: Optional[Iterable[str]]
@@ -80,6 +102,22 @@ def _extract_ids_from_domain(domain: Iterable[Iterable[object]] | None) -> List[
             if isinstance(value, list):
                 ids.extend(int(v) for v in value)
     return ids
+
+
+def _matches_domain(record: Dict[str, object], domain: Iterable[Iterable[object]] | None) -> bool:
+    if not domain:
+        return True
+    for term in domain:
+        if len(term) < 3:
+            continue
+        field, op, value = term[0], term[1], term[2]
+        if op == "in":
+            if record.get(field) not in value:
+                return False
+        elif op == "=":
+            if record.get(field) != value:
+                return False
+    return True
 
 
 class SimulatorServiceTests(TestCase):
@@ -148,24 +186,33 @@ class SimulatorServiceTests(TestCase):
         events = service.run_once(force=True)
         self.assertEqual(len(events), 6)
 
-        # After sell down and receiving the produce item should have decreased, then increased,
-        # while the dairy item expires to zero.
-        self.assertAlmostEqual(self.client._quants[1]["quantity"], 17.6, places=2)
-        self.assertAlmostEqual(self.client._quants[2]["quantity"], 0.0, places=2)
+        # Sell down reduces stock, expiry trims further, then receiving replenishes.
+        self.assertAlmostEqual(self.client._quants[1]["quantity"], 24.0, places=2)
+        self.assertAlmostEqual(self.client._quants[2]["quantity"], 4.0, places=2)
+
+        # The dairy item was expired and should receive a fresh lot.
+        dairy_lot = self.client._quants[2]["lot_id"][0]
+        self.assertIn(dairy_lot, self.client._lots)
+        self.assertNotEqual(self.client._lots[dairy_lot]["name"], "LOT-202")
+        self.assertTrue(any(call["model"] == "stock.lot" for call in self.client.create_calls))
 
         with self.events_path.open("r", encoding="utf-8") as handle:
             lines = handle.readlines()
         self.assertEqual(len(lines), 6)
         self.assertTrue(all("\"source\":\"simulator\"" in line for line in lines))
 
-    def test_state_prevents_double_run(self) -> None:
+    def test_daily_job_respects_interval(self) -> None:
         service = self._service()
         service.run_once(force=True)
-        writes_after_first = len(self.client.write_calls)
+        writes_after_first = list(self.client.write_calls)
 
         events = service.run_once(force=False)
-        self.assertEqual(events, [])
-        self.assertEqual(len(self.client.write_calls), writes_after_first)
+        # Daily expiry should be skipped, leaving only sell down + receiving.
+        self.assertEqual(len(events), 4)
+        self.assertEqual(
+            [call["model"] for call in self.client.write_calls[len(writes_after_first) :]],
+            ["stock.quant", "stock.quant", "stock.quant", "stock.quant"],
+        )
 
     def test_scheduler_ticks_respect_interval(self) -> None:
         service = self._service()
@@ -173,11 +220,11 @@ class SimulatorServiceTests(TestCase):
         with patch("services.simulator.scheduler.time.sleep", return_value=None):
             scheduler.run(max_ticks=2)
 
-        # First tick runs and records events, second tick should be skipped.
+        # First tick runs all jobs; second tick should skip daily expiry only.
         with self.events_path.open("r", encoding="utf-8") as handle:
             lines = handle.readlines()
-        self.assertEqual(len(lines), 6)
+        self.assertEqual(len(lines), 10)
 
         events = service.run_once(force=False)
-        self.assertEqual(events, [])
+        self.assertEqual(len(events), 4)
 
