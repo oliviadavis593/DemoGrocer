@@ -45,7 +45,7 @@ class FakeOdooClient:
             ids = _extract_ids_from_domain(domain)
             records = [self._products[i] for i in ids if i in self._products]
             return [self._select_fields(record, fields) for record in records]
-        if model == "stock.production.lot":
+        if model == "stock.lot":
             ids = _extract_ids_from_domain(domain)
             records = [self._lots[i] for i in ids if i in self._lots]
             return [self._select_fields(record, fields) for record in records]
