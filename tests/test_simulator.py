@@ -1,6 +1,7 @@
 """Tests for the simulator service."""
 from __future__ import annotations
 
+from collections import Counter
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -11,6 +12,12 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from packages.db import EventStore
+from services.analysis.shrink_triggers import (
+    LowMovementConfig,
+    OverstockConfig,
+    ShrinkTriggerConfig,
+    ShrinkTriggerDetector,
+)
 from services.simulator.config import SimulatorConfig
 from services.simulator.events import EventWriter
 from services.simulator.scheduler import SimulatorScheduler
@@ -174,6 +181,16 @@ class SimulatorServiceTests(TestCase):
         self.db_path = base_path / "events.db"
         self.writer = EventWriter(self.events_path, store=EventStore(self.db_path))
         self.state = StateTracker(self.state_path, timedelta(hours=24))
+        shrink_config = ShrinkTriggerConfig(
+            low_movement=LowMovementConfig(units_threshold=40.0, window_days=7),
+            overstock=OverstockConfig(
+                default_days_of_supply=6.0,
+                category_thresholds={"Produce": 8.0},
+                velocity_window_days=7,
+                min_daily_velocity=0.1,
+            ),
+        )
+        self.shrink_detector = ShrinkTriggerDetector(self.writer.store, shrink_config)
 
     def tearDown(self) -> None:
         self.tmpdir.cleanup()
@@ -186,12 +203,13 @@ class SimulatorServiceTests(TestCase):
             self.state,
             now_fn=lambda: self.now,
             rng=Random(0),
+            shrink_detector=self.shrink_detector,
         )
 
     def test_once_runs_all_jobs(self) -> None:
         service = self._service()
         events = service.run_once(force=True)
-        self.assertEqual(len(events), 9)
+        self.assertEqual(len(events), 13)
 
         # Sell down reduces stock, returns add back a little, expiry & shrink trim, receiving replenishes.
         self.assertAlmostEqual(self.client._quants[1]["quantity"], 22.1, places=2)
@@ -203,9 +221,11 @@ class SimulatorServiceTests(TestCase):
         self.assertNotEqual(self.client._lots[dairy_lot]["name"], "LOT-202")
         self.assertTrue(any(call["model"] == "stock.lot" for call in self.client.create_calls))
 
-        event_types = {event.type for event in events}
-        self.assertIn("returns", event_types)
-        self.assertIn("shrink", event_types)
+        counts = Counter(event.type for event in events)
+        self.assertGreaterEqual(counts["returns"], 1)
+        self.assertGreaterEqual(counts["shrink"], 1)
+        self.assertEqual(counts["flag_low_movement"], 2)
+        self.assertEqual(counts["flag_overstock"], 2)
 
     def test_returns_never_exceed_total_sold(self) -> None:
         service = self._service()
@@ -238,7 +258,7 @@ class SimulatorServiceTests(TestCase):
 
         with self.events_path.open("r", encoding="utf-8") as handle:
             lines = handle.readlines()
-        self.assertEqual(len(lines), 9)
+        self.assertEqual(len(lines), 13)
         self.assertTrue(all("\"source\":\"simulator\"" in line for line in lines))
 
     def test_daily_job_respects_interval(self) -> None:
@@ -247,8 +267,11 @@ class SimulatorServiceTests(TestCase):
         writes_after_first = list(self.client.write_calls)
 
         events = service.run_once(force=False)
-        # Daily expiry should be skipped, leaving only sell down + receiving.
-        self.assertEqual(len(events), 4)
+        # Daily expiry should be skipped, leaving only sell down + receiving job events (plus analysis flags).
+        self.assertEqual(len(events), 8)
+        counts = Counter(event.type for event in events)
+        self.assertEqual(counts["flag_low_movement"], 2)
+        self.assertEqual(counts["flag_overstock"], 2)
         self.assertEqual(
             [call["model"] for call in self.client.write_calls[len(writes_after_first) :]],
             ["stock.quant", "stock.quant", "stock.quant", "stock.quant"],
@@ -263,7 +286,10 @@ class SimulatorServiceTests(TestCase):
         # First tick runs all jobs; second tick should skip daily expiry only.
         with self.events_path.open("r", encoding="utf-8") as handle:
             lines = handle.readlines()
-        self.assertEqual(len(lines), 13)
+        self.assertEqual(len(lines), 21)
 
         events = service.run_once(force=False)
-        self.assertEqual(len(events), 4)
+        self.assertEqual(len(events), 8)
+        counts = Counter(event.type for event in events)
+        self.assertEqual(counts["flag_low_movement"], 2)
+        self.assertEqual(counts["flag_overstock"], 2)

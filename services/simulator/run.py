@@ -9,6 +9,8 @@ from pathlib import Path
 
 from packages.odoo_client import OdooClient
 
+from services.analysis.shrink_triggers import ShrinkTriggerDetector, load_config as load_shrink_trigger_config
+
 from .config import load_config
 from .events import EventWriter
 from .scheduler import SimulatorScheduler
@@ -17,6 +19,7 @@ from .state import StateTracker
 
 
 DEFAULT_CONFIG_PATH = Path("config/simulator.yaml")
+DEFAULT_SHRINK_TRIGGER_CONFIG_PATH = Path("config/shrink_triggers.yaml")
 DEFAULT_EVENTS_PATH = Path("out/events.jsonl")
 DEFAULT_STATE_PATH = Path("out/simulator_state.json")
 DEFAULT_INTERVAL_SECONDS = 60 * 60  # hourly by default
@@ -27,8 +30,16 @@ def build_service() -> SimulatorService:
     client.authenticate()
     config = load_config(DEFAULT_CONFIG_PATH)
     event_writer = EventWriter(DEFAULT_EVENTS_PATH)
+    shrink_config = load_shrink_trigger_config(DEFAULT_SHRINK_TRIGGER_CONFIG_PATH)
+    shrink_detector = ShrinkTriggerDetector(getattr(event_writer, "store", None), shrink_config)
     state_tracker = StateTracker(DEFAULT_STATE_PATH, timedelta(hours=24))
-    return SimulatorService(client, config, event_writer, state_tracker)
+    return SimulatorService(
+        client,
+        config,
+        event_writer,
+        state_tracker,
+        shrink_detector=shrink_detector,
+    )
 
 
 def cmd_once(args: argparse.Namespace) -> None:

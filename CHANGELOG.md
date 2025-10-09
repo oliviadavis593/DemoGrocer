@@ -1,7 +1,8 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+
+## [0.2.0] - 2025-10-09
 ### Added
 - Staff seeding script and `make seed-staff` target for provisioning demo cashier, department manager, and store manager accounts with credentials exported to `.out/staff_credentials.json`.
 - SQLite-backed event store with migration tooling, simulator persistence, and new `/events` plus `/metrics/summary` API endpoints for querying inventory activity.
@@ -9,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - Developer UX polish with expanded Make targets (`diagnose`, `seed`, `simulate`, `simulate-start`, `web`, `labels-demo`), improved diagnostics output, and README quick-start coverage for each workflow.
 - Repository overview section and documentation (`docs/overview.md`, `docs/structure.md`) outlining architecture, directory responsibilities, key Make targets, and reporting API endpoints.
 - Simulator jobs for customer returns and shrinkage that append JSONL/DB events while keeping on-hand quantities non-negative.
+- Shrink trigger detector that raises `flag_low_movement` and `flag_overstock` events from simulator ticks using configurable thresholds in `config/shrink_triggers.yaml`.
 
 ## [0.1.0] - 2025-10-08
 ### Added

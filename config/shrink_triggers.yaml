@@ -1,0 +1,13 @@
+low_movement:
+  units_threshold: 12
+  window_days: 7
+overstock:
+  default_days_of_supply: 21
+  category_thresholds:
+    Produce: 14
+    Dairy: 12
+    Meat: 16
+    Frozen: 28
+  velocity_window_days: 7
+  min_daily_velocity: 0.25
+history_limit: 5000

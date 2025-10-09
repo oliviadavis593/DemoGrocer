@@ -7,6 +7,8 @@ from typing import List, Optional, Sequence
 
 from packages.odoo_client import OdooClient
 
+from services.analysis.shrink_triggers import ShrinkTriggerDetector
+
 from .config import SimulatorConfig
 from .events import EventWriter, SimulatorEvent
 from .inventory import InventoryRepository
@@ -25,6 +27,7 @@ class SimulatorService:
         state_tracker: StateTracker,
         now_fn=None,
         rng: Optional[Random] = None,
+        shrink_detector: Optional[ShrinkTriggerDetector] = None,
     ) -> None:
         self.client = client
         self.config = config
@@ -33,6 +36,7 @@ class SimulatorService:
         self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))
         self.inventory = InventoryRepository(client)
         self.rng = rng
+        self.shrink_detector = shrink_detector
 
     def run_once(self, force: bool = False) -> Sequence[SimulatorEvent]:
         now = self.now_fn()
@@ -52,6 +56,11 @@ class SimulatorService:
                 events = job.run(context)
             if events:
                 all_events.extend(events)
+        if self.shrink_detector is not None:
+            analysis_events = self.shrink_detector.evaluate(now, snapshot)
+            if analysis_events:
+                self.event_writer.write(analysis_events)
+                all_events.extend(analysis_events)
         return all_events
 
     def _build_jobs(self) -> Sequence:

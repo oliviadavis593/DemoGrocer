@@ -7,7 +7,7 @@ This guide walks through the repository layout so new contributors can quickly l
 | Path | Purpose |
 | ---- | ------- |
 | `apps/` | Application entry points (FastAPI web server and ASGI adapters). |
-| `config/` | Configuration files such as simulator defaults. |
+| `config/` | Configuration files such as simulator defaults and shrink-trigger thresholds. |
 | `docs/` | Project documentation, including this guide and the high-level overview. |
 | `fastapi/` | Minimal FastAPI wrapper for alternative deployments. |
 | `packages/` | Reusable Python packages shared across scripts and services (`db`, `odoo_client`). |
@@ -45,6 +45,7 @@ This guide walks through the repository layout so new contributors can quickly l
   - `events.py` – JSONL writer, historical helpers (for returns accounting), and the database bridge for simulator events.
   - `inventory.py` – Odoo inventory repository for loading and mutating stock quants.
   - `state.py` & `scheduler.py` – Track job execution intervals and schedule recurring runs.
+- `services/analysis/` – Post-processing helpers such as `shrink_triggers.py`, which emits `flag_low_movement` and `flag_overstock` events based on recent sales velocity.
 - `services/docs/labels.py` – Markdown-based PDF label renderer with optional WeasyPrint integration and pure-Python fallback.
 
 ## apps/web/data.py

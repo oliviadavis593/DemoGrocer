@@ -6,6 +6,7 @@ FoodFlow is a developer sandbox that showcases how an Odoo-backed grocery retail
 - Staff seeding utilities that provision demo user accounts with pre-configured roles for store workflows.
 - Inventory seeding utilities that provision demo products, lots, and stock levels in Odoo.
 - A simulator that applies daily sales, expiry, and receiving patterns while logging events to JSONL and SQLite.
+- Shrink trigger analysis that flags low-movement and overstock conditions into the shared event log.
 - A FastAPI reporting service exposing recent events, at-risk products, metrics, and label generation.
 - Supporting scripts and Make targets that streamline diagnostics, database migrations, and PDF label previews.
 
@@ -89,7 +90,7 @@ make seed-staff
 # cashier_2: exists
 
 make simulate
-# INFO 2024-01-10 12:00:00,000 INFO Simulator once run emitted 9 events
+# INFO 2024-01-10 12:00:00,000 INFO Simulator once run emitted 13 events
 
 make simulate-start
 # INFO 2024-01-10 12:00:00,000 INFO Simulator scheduler tick (Ctrl+C to stop)
@@ -107,7 +108,7 @@ Each command maps to a common developer workflow:
 - `make diagnose` authenticates to Odoo and prints the database name plus capability checks for the `stock.lot` model and `life_date` field.
 - `make seed` provisions demo inventory data inside Odoo and summarizes the number of products created.
 - `make seed-staff` syncs demo cashier, department manager, and store manager accounts and records their credentials under `.out/staff_credentials.json`.
-- `make simulate` runs one simulator cycle, appending sell-down, returns, shrink, expiry, and receiving events to `out/events.jsonl` and persisting them to `out/foodflow.db`.
+- `make simulate` runs one simulator cycle, appending sell-down, returns, shrink, expiry, receiving, and analysis flag events to `out/events.jsonl` while persisting everything to `out/foodflow.db`.
 - `make simulate-start` launches the background scheduler for continuous simulation until you stop it.
 - `make labels-demo` renders sample product labels to PDF under `out/labels`.
 - `make web` starts the FastAPI reporting server so `/health` returns 200 once the app is ready.
@@ -116,8 +117,13 @@ Each command maps to a common developer workflow:
 database so events are stored in `out/foodflow.db`. After a run you can spot-check the new activity with:
 
 ```bash
-tail -n 50 out/events.jsonl | grep -E '"type":"(returns|shrink)"' | head
+tail -n 50 out/events.jsonl | grep -E '"type":"(returns|shrink|flag_low_movement|flag_overstock)"' | head
+
+curl -s "http://localhost:8000/events?type=flag_low_movement&since=7d" | head
+curl -s "http://localhost:8000/events?type=flag_overstock&since=7d" | head
 ```
+
+Shrink trigger thresholds live in `config/shrink_triggers.yaml`. Tweak the sales window, minimum units sold, or per-category days-of-supply limits and re-run `make simulate` to observe how many `flag_low_movement` and `flag_overstock` events the detector emits.
 
 The long running targets (`simulate-start` and `web`) can be stopped with `Ctrl+C`.
 
