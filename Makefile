@@ -1,5 +1,25 @@
-.PHONY: seed diagnose
+.PHONY: seed diagnose simulate simulate-start web labels-demo migrate
+
+PYTHON ?= python3
+RUN := PYTHONPATH=. $(PYTHON)
+
 seed:
-	@PYTHONPATH=. python3 scripts/seed_inventory.py
+	@$(RUN) scripts/seed_inventory.py
+
 diagnose:
-	@PYTHONPATH=. python3 scripts/diagnose_odoo.py
+	@$(RUN) scripts/diagnose_odoo.py
+
+simulate: migrate
+	@$(RUN) -m services.simulator.run once
+
+simulate-start: migrate
+	@$(RUN) -m services.simulator.run start
+
+web:
+	@$(RUN) -m apps.web.main
+
+labels-demo:
+	@$(RUN) scripts/labels_demo.py
+
+migrate:
+	@$(RUN) scripts/db_migrate.py >/dev/null

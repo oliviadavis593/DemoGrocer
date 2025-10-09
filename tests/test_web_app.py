@@ -53,6 +53,22 @@ def test_load_recent_events_orders_and_limits(tmp_path: Path) -> None:
     assert [record.product for record in records] == ["Whole Milk", "Gala Apples"]
 
 
+def test_root_endpoint_lists_links() -> None:
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+    )
+    client = TestClient(app)
+
+    response = client.get("/")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["app"] == "FoodFlow reporting API"
+    assert payload["status"] == "ok"
+    assert "/health" in payload["links"].values()
+    assert payload["links"]["events"] == "/events"
+
+
 def test_calculate_at_risk_filters_by_threshold() -> None:
     snapshot = snapshot_from_quants(
         [

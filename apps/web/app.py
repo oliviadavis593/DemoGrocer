@@ -60,6 +60,23 @@ def create_app(
             status_code=500,
         )
 
+    @app.get("/", response_class=JSONResponse)
+    def index() -> dict[str, object]:
+        return {
+            "app": "FoodFlow reporting API",
+            "status": "ok",
+            "links": {
+                "health": "/health",
+                "events_recent": "/events/recent",
+                "events": "/events",
+                "metrics_summary": "/metrics/summary",
+                "at_risk": "/at-risk",
+                "labels_markdown": "/labels/markdown",
+                "labels_index": "/out/labels/",
+            },
+            "docs": "See README.md for curl examples and Make targets.",
+        }
+
     @app.get("/health", response_class=JSONResponse)
     def health() -> dict[str, str]:
         return {"status": "ok"}

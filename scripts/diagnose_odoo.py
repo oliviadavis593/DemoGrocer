@@ -13,26 +13,20 @@ from packages.odoo_client import OdooClient
 def main() -> None:
     client = OdooClient()
     client.authenticate()
-    print("DB:", client.database)
-    print(
-        "stock.lot present:",
-        bool(
-            client.search_read(
-                "ir.model", [("model", "=", "stock.lot")], ["id"], limit=1
-            )
-        ),
+    print(f"DB name: {client.database}")
+    stock_lot_exists = bool(
+        client.search_read("ir.model", [("model", "=", "stock.lot")], ["id"], limit=1)
     )
-    print(
-        "life_date field present:",
-        bool(
-            client.search_read(
-                "ir.model.fields",
-                [("model", "=", "stock.lot"), ("name", "=", "life_date")],
-                ["id"],
-                limit=1,
-            )
-        ),
+    print(f"stock.lot present: {str(stock_lot_exists).lower()}")
+    life_date_exists = bool(
+        client.search_read(
+            "ir.model.fields",
+            [("model", "=", "stock.lot"), ("name", "=", "life_date")],
+            ["id"],
+            limit=1,
+        )
     )
+    print(f"life_date present: {str(life_date_exists).lower()}")
 
 
 if __name__ == "__main__":
