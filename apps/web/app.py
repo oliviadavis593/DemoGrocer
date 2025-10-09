@@ -5,14 +5,34 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional, Sequence, Tuple
 
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
+
+try:  # pragma: no cover - optional dependency
+    from pydantic import BaseModel
+except ModuleNotFoundError:  # pragma: no cover - lightweight fallback
+    class BaseModel:
+        """Minimal stand-in for pydantic.BaseModel used during tests."""
+
+        def __init__(self, **data: object) -> None:
+            annotations = getattr(self, "__annotations__", {})
+            for key in annotations:
+                setattr(self, key, data.get(key))
+            for key, value in data.items():
+                if not hasattr(self, key):
+                    setattr(self, key, value)
+
+        def model_dump(self) -> dict[str, object]:
+            annotations = getattr(self, "__annotations__", {})
+            return {key: getattr(self, key, None) for key in annotations}
 
 from packages.db import EventStore
 from packages.odoo_client import OdooClient, OdooClientError
 from services.docs import MarkdownLabelGenerator
+from services.recall import QuarantinedItem, RecallResult, RecallService
+from services.simulator.events import EventWriter
 from services.simulator.inventory import InventoryRepository
 
 from .data import (
@@ -28,8 +48,14 @@ RepositoryFactory = Callable[[], Optional[InventoryRepository]]
 OdooClientProvider = Callable[[], Optional[OdooClient]]
 EventStoreProvider = Callable[[], EventStore]
 LabelsPathProvider = Callable[[], Path]
+RecallServiceFactory = Callable[[], Optional[RecallService]]
 
 _DURATION_RE = re.compile(r"^(?P<value>\d+)(?P<unit>[dhm])$")
+
+
+class RecallTriggerPayload(BaseModel):
+    codes: Optional[Sequence[str]] = None
+    categories: Optional[Sequence[str]] = None
 
 
 def create_app(
@@ -40,6 +66,7 @@ def create_app(
     event_store_provider: EventStoreProvider | None = None,
     logger: logging.Logger | None = None,
     labels_path_provider: LabelsPathProvider | None = None,
+    recall_service_factory: RecallServiceFactory | None = None,
 ) -> FastAPI:
     """Construct the FastAPI application."""
 
@@ -49,6 +76,23 @@ def create_app(
     odoo_provider = odoo_client_provider or _default_odoo_client
     store_provider = event_store_provider or _default_event_store
     labels_provider = labels_path_provider or _default_labels_path
+    recall_provider = recall_service_factory
+
+    def _build_recall_service() -> Optional[RecallService]:
+        nonlocal recall_provider
+        if recall_provider is not None:
+            return recall_provider()
+        client = odoo_provider()
+        if client is None:
+            return None
+        try:
+            store = store_provider()
+        except Exception:
+            app_logger.exception("Failed to initialize event store for recall operations")
+            store = None
+        events_path = events_provider()
+        writer = EventWriter(events_path, store=store)
+        return RecallService(client, writer)
 
     app = FastAPI(title="FoodFlow Reporting API")
 
@@ -73,6 +117,8 @@ def create_app(
                 "at_risk": "/at-risk",
                 "labels_markdown": "/labels/markdown",
                 "labels_index": "/out/labels/",
+                "recall_trigger": "/recall/trigger",
+                "recall_quarantined": "/recall/quarantined",
             },
             "docs": "See README.md for curl examples and Make targets.",
         }
@@ -158,6 +204,50 @@ def create_app(
                 "by_type": summary.get("events_by_type", {}),
             },
         }
+
+    @app.post("/recall/trigger", response_class=JSONResponse)
+    def recall_trigger(payload: RecallTriggerPayload = Body(...)) -> dict[str, object]:
+        if isinstance(payload, dict):  # Compatibility with lightweight FastAPI stub
+            payload = RecallTriggerPayload(**payload)
+        service = _build_recall_service()
+        if service is None:
+            raise HTTPException(503, {"error": "odoo_unreachable"})
+        codes = list(payload.codes or [])
+        categories = list(payload.categories or [])
+        try:
+            results = service.recall(default_codes=codes, categories=categories)
+        except ValueError as exc:
+            raise HTTPException(400, {"detail": str(exc)}) from exc
+        except OdooClientError:
+            app_logger.exception("Failed to run recall due to Odoo error")
+            raise HTTPException(503, {"error": "odoo_unreachable"}) from None
+        except Exception:
+            app_logger.exception("Failed to quarantine inventory for recall")
+            raise HTTPException(500, {"error": "recall_failed"}) from None
+
+        items = [_serialize_recall_result(result) for result in results]
+        meta: dict[str, object] = {
+            "requested_codes": codes,
+            "requested_categories": categories,
+            "count": len(items),
+        }
+        return {"items": items, "meta": meta}
+
+    @app.get("/recall/quarantined", response_class=JSONResponse)
+    def recall_quarantined() -> dict[str, object]:
+        service = _build_recall_service()
+        if service is None:
+            return {"items": [], "meta": {"error": "odoo_unreachable"}}
+        try:
+            items = service.list_quarantined()
+        except OdooClientError:
+            app_logger.exception("Failed to query quarantined inventory in Odoo")
+            return {"items": [], "meta": {"error": "odoo_unreachable"}}
+        except Exception:
+            app_logger.exception("Failed to list quarantined inventory")
+            return {"items": [], "meta": {"error": "recall_query_failed"}}
+        payload = [_serialize_quarantine_item(item) for item in items]
+        return {"items": payload, "meta": {"count": len(payload)}}
 
     @app.get("/at-risk", response_class=JSONResponse)
     def at_risk(days: str = Query("3")) -> dict[str, object]:
@@ -434,6 +524,26 @@ def _labels_directory_listing(directory: Path) -> dict[str, object]:
             "count": len(items),
             "output_dir": str(directory),
         },
+    }
+
+
+def _serialize_recall_result(result: RecallResult) -> dict[str, object]:
+    return {
+        "product": result.product,
+        "default_code": result.default_code,
+        "lot": result.lot,
+        "quantity": result.quantity,
+        "source_location": result.source_location,
+        "destination_location": result.destination_location,
+    }
+
+
+def _serialize_quarantine_item(item: QuarantinedItem) -> dict[str, object]:
+    return {
+        "product": item.product,
+        "default_code": item.default_code,
+        "lot": item.lot,
+        "quantity": item.quantity,
     }
 
 

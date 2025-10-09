@@ -35,6 +35,7 @@ This guide walks through the repository layout so new contributors can quickly l
 - `scripts/diagnose_odoo.py` – Connectivity health check that prints the database name and verifies `stock.lot` and its `life_date` field.
 - `scripts/db_migrate.py` – SQLite schema migration utility that creates indexes and tables for the simulator event store.
 - `scripts/labels_demo.py` – Convenience helper to generate PDF labels for sample products and report the output paths.
+- `scripts/recall.py` – Quarantines products by default code or category, creating the `Quarantine` location on demand and logging `recall_quarantine` events.
 
 ## services/
 
@@ -46,6 +47,7 @@ This guide walks through the repository layout so new contributors can quickly l
   - `inventory.py` – Odoo inventory repository for loading and mutating stock quants.
   - `state.py` & `scheduler.py` – Track job execution intervals and schedule recurring runs.
 - `services/analysis/` – Post-processing helpers such as `shrink_triggers.py`, which emits `flag_low_movement` and `flag_overstock` events based on recent sales velocity.
+- `services/recall/` – Recall orchestration utilities shared by the CLI and API routes for quarantining stock.
 - `services/docs/labels.py` – Markdown-based PDF label renderer with optional WeasyPrint integration and pure-Python fallback.
 
 ## apps/web/data.py

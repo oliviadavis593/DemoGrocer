@@ -7,6 +7,19 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Tuple
 from urllib.parse import parse_qs
 
+try:  # pragma: no cover - optional dependency
+    from pydantic import BaseModel as PydanticBaseModel
+except ModuleNotFoundError:  # pragma: no cover
+    PydanticBaseModel = None  # type: ignore[misc]
+
+
+def _is_pydantic_model(annotation: Any) -> bool:
+    return (
+        PydanticBaseModel is not None
+        and inspect.isclass(annotation)
+        and issubclass(annotation, PydanticBaseModel)
+    )
+
 from . import responses
 
 RouteKey = Tuple[str, str]
@@ -35,6 +48,13 @@ class Query:
         self.default = default
         self.ge = ge
         self.le = le
+
+
+class Body:
+    """Descriptor for body parameters."""
+
+    def __init__(self, default: Any = inspect._empty) -> None:
+        self.default = default
 
 
 @dataclass
@@ -88,6 +108,7 @@ class FastAPI:
             body_params = {}
         else:
             body_params = {"body": body}
+        body_params = dict(body_params)
         for name, parameter in sig.parameters.items():
             default = parameter.default
             annotation = parameter.annotation
@@ -102,7 +123,24 @@ class FastAPI:
                     raise HTTPException(422, {name: f"must be <= {default.le}"})
                 kwargs[name] = value
             else:
-                if name in body_params:
+                if isinstance(default, Body):
+                    if isinstance(body, Mapping) and name not in body_params:
+                        body_params[name] = body
+                    default = default.default
+                if _is_pydantic_model(annotation):
+                    source: Optional[Mapping[str, Any]]
+                    if isinstance(body, Mapping):
+                        source = body
+                    else:
+                        entry = body_params.get(name)
+                        source = entry if isinstance(entry, Mapping) else None
+                    if source is None:
+                        if default is inspect._empty:
+                            raise HTTPException(400, f"Missing required parameter '{name}'")
+                        kwargs[name] = default
+                    else:
+                        kwargs[name] = annotation(**source)  # type: ignore[call-arg]
+                elif name in body_params:
                     kwargs[name] = body_params[name]
                 elif name in params:
                     kwargs[name] = params[name]

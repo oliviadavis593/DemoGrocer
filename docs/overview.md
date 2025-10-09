@@ -12,6 +12,7 @@ FoodFlow bundles the tooling needed to demonstrate a realistic grocery retail op
 - **scripts/seed_inventory.py** – Idempotent importer that provisions units of measure, categories, products, lots, and starting balances. The script writes a CSV summary under `out/`.
 - **services/simulator** – Orchestrates sell-down, returns, shrink, expiry, and receiving jobs. Events flow to `out/events.jsonl` and optionally to SQLite via `packages/db`.
 - **services/analysis/shrink_triggers.py** – Evaluates recent sales history against configurable thresholds to emit `flag_low_movement` and `flag_overstock` analysis events during simulator ticks.
+- **services/recall** – Provides helpers to quarantine products, ensuring `recall_quarantine` events and the `Quarantine` location stay in sync for both CLI and API triggers.
 - **packages/db** – Local SQLite helpers and schema migration tooling that store simulator events for historical reporting.
 - **apps/web** – FastAPI application that surfaces diagnostics, recent events, inventory metrics, PDF label generation, and directory listings for rendered labels.
 - **services/docs/labels.py** – Markdown-to-PDF label generator used both by the API and by the `make labels-demo` helper script.
@@ -25,6 +26,7 @@ FoodFlow bundles the tooling needed to demonstrate a realistic grocery retail op
    - `tail -n 50 out/events.jsonl | grep -E '"type":"(returns|shrink|flag_low_movement|flag_overstock)"' | head`
    - `curl -s "http://localhost:8000/events?type=flag_low_movement&since=7d" | head`
 5. Launch `make web`, then browse `http://localhost:8000/` for links to health checks, events, metrics, at-risk products, and label endpoints.
+6. Use `PYTHONPATH=. python3 scripts/recall.py --codes FF101` to quarantine recalled SKUs and confirm the results with `curl -s "http://localhost:8000/recall/quarantined" | head`.
 
 ## Key Make Targets
 

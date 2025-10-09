@@ -10,7 +10,10 @@ from typing import Sequence
 from dotenv import load_dotenv
 import uvicorn
 
+from packages.db import EventStore
 from packages.odoo_client import OdooClient, OdooClientError
+from services.recall import RecallService
+from services.simulator.events import EventWriter
 from services.simulator.inventory import InventoryRepository
 
 from .app import create_app
@@ -50,11 +53,17 @@ def main(argv: Sequence[str] | None = None) -> None:
         (lambda: InventoryRepository(odoo_client)) if odoo_client is not None else (lambda: None)
     )
     odoo_provider = lambda: odoo_client
+    recall_factory = (
+        (lambda: RecallService(odoo_client, EventWriter(Path("out/events.jsonl"), store=EventStore())))
+        if odoo_client is not None
+        else (lambda: None)
+    )
 
     app = create_app(
         repository_factory=repository_factory,
         odoo_client_provider=odoo_provider,
         logger=LOGGER,
+        recall_service_factory=recall_factory,
     )
     LOGGER.info("Starting FoodFlow web server on http://%s:%s", args.host, args.port)
 

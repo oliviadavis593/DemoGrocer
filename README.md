@@ -7,6 +7,7 @@ FoodFlow is a developer sandbox that showcases how an Odoo-backed grocery retail
 - Inventory seeding utilities that provision demo products, lots, and stock levels in Odoo.
 - A simulator that applies daily sales, expiry, and receiving patterns while logging events to JSONL and SQLite.
 - Shrink trigger analysis that flags low-movement and overstock conditions into the shared event log.
+- Recall tooling that quarantines products via CLI or API while logging `recall_quarantine` events.
 - A FastAPI reporting service exposing recent events, at-risk products, metrics, and label generation.
 - Supporting scripts and Make targets that streamline diagnostics, database migrations, and PDF label previews.
 
@@ -125,6 +126,27 @@ curl -s "http://localhost:8000/events?type=flag_overstock&since=7d" | head
 
 Shrink trigger thresholds live in `config/shrink_triggers.yaml`. Tweak the sales window, minimum units sold, or per-category days-of-supply limits and re-run `make simulate` to observe how many `flag_low_movement` and `flag_overstock` events the detector emits.
 
+### Recalls and Quarantine
+
+Quarantine products by default code or category with the recall script:
+
+```bash
+PYTHONPATH=. python3 scripts/recall.py --codes FF101,FF102
+PYTHONPATH=. python3 scripts/recall.py --categories Dairy
+```
+
+Each match is zeroed from its sellable location, moved into the `Quarantine` location (created on demand), and logged as `type:"recall_quarantine"` in both `out/events.jsonl` and the SQLite event store. Inspect the quarantined stock and confirm the database entries through the API:
+
+```bash
+curl -s -X POST "http://localhost:8000/recall/trigger" \
+  -H "Content-Type: application/json" \
+  -d '{"codes":["FF101"]}'
+
+curl -s "http://localhost:8000/recall/quarantined" | jq
+```
+
+Adjust thresholds or disable recall monitoring by editing `config/shrink_triggers.yaml` and rerunning the simulator or recall script as needed.
+
 The long running targets (`simulate-start` and `web`) can be stopped with `Ctrl+C`.
 
 ### Reporting API at a Glance
@@ -171,6 +193,15 @@ curl -s -X POST "http://localhost:8000/labels/markdown" \
 
 curl -s "http://localhost:8000/out/labels/"
 # {"labels":[{"filename":"FF101.pdf","path":"out/labels/FF101.pdf",...}], "meta":{"count":2,"exists":true}}
+
+curl -s -X POST "http://localhost:8000/recall/trigger" \
+  -H "Content-Type: application/json" \
+  -d '{"codes":["FF101","FF102"]}'
+# {"items":[{"product":"Whole Milk","default_code":"FF102","lot":"LOT-FF102","quantity":8.0,"source_location":"Sales Floor","destination_location":"Quarantine"},...],
+#  "meta":{"requested_codes":["FF101","FF102"],"requested_categories":[],"count":2}}
+
+curl -s "http://localhost:8000/recall/quarantined"
+# {"items":[{"product":"Whole Milk","default_code":"FF102","lot":"LOT-FF102","quantity":8.0}], "meta":{"count":1}}
 ```
 
 If `out/events.jsonl` is missing or contains invalid JSON, the API returns

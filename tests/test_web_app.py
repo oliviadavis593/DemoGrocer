@@ -10,6 +10,7 @@ from apps.web import create_app
 from apps.web.data import calculate_at_risk, load_recent_events, snapshot_from_quants
 from packages.db import EventStore, InventoryEvent
 from scripts.db_migrate import run as run_migration
+from services.recall import QuarantinedItem, RecallResult
 from services.simulator.inventory import QuantRecord
 
 
@@ -57,6 +58,7 @@ def test_root_endpoint_lists_links() -> None:
     app = create_app(
         repository_factory=lambda: None,
         odoo_client_provider=lambda: None,
+        recall_service_factory=lambda: None,
     )
     client = TestClient(app)
 
@@ -67,6 +69,86 @@ def test_root_endpoint_lists_links() -> None:
     assert payload["status"] == "ok"
     assert "/health" in payload["links"].values()
     assert payload["links"]["events"] == "/events"
+    assert payload["links"]["recall_trigger"] == "/recall/trigger"
+
+
+def test_recall_trigger_invokes_service() -> None:
+    class FakeRecallService:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def recall(self, *, default_codes=None, categories=None):
+            self.calls.append((default_codes, categories))
+            return [
+                RecallResult(
+                    product="Gala Apples",
+                    default_code="FF101",
+                    lot="LOT-1",
+                    quantity=5.0,
+                    source_location="Sales Floor",
+                    destination_location="Quarantine",
+                )
+            ]
+
+        def list_quarantined(self):
+            return []
+
+    fake_service = FakeRecallService()
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        recall_service_factory=lambda: fake_service,
+    )
+    client = TestClient(app)
+
+    response = client.post("/recall/trigger", json={"codes": ["FF101"], "categories": []})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["meta"]["count"] == 1
+    assert fake_service.calls == [(["FF101"], [])]
+    assert payload["items"][0]["product"] == "Gala Apples"
+    assert payload["items"][0]["destination_location"] == "Quarantine"
+
+
+def test_recall_quarantined_lists_items() -> None:
+    class FakeRecallService:
+        def recall(self, *, default_codes=None, categories=None):
+            return []
+
+        def list_quarantined(self):
+            return [
+                QuarantinedItem(
+                    product="Whole Milk",
+                    default_code="FF102",
+                    lot="LOT-2",
+                    quantity=8.0,
+                )
+            ]
+
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        recall_service_factory=lambda: FakeRecallService(),
+    )
+    client = TestClient(app)
+
+    response = client.get("/recall/quarantined")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["meta"]["count"] == 1
+    assert payload["items"][0]["default_code"] == "FF102"
+
+
+def test_recall_trigger_returns_service_unavailable() -> None:
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        recall_service_factory=lambda: None,
+    )
+    client = TestClient(app)
+
+    response = client.post("/recall/trigger", json={"codes": ["FF101"]})
+    assert response.status_code == 503
 
 
 def test_calculate_at_risk_filters_by_threshold() -> None:

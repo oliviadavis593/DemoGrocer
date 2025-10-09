@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - Repository overview section and documentation (`docs/overview.md`, `docs/structure.md`) outlining architecture, directory responsibilities, key Make targets, and reporting API endpoints.
 - Simulator jobs for customer returns and shrinkage that append JSONL/DB events while keeping on-hand quantities non-negative.
 - Shrink trigger detector that raises `flag_low_movement` and `flag_overstock` events from simulator ticks using configurable thresholds in `config/shrink_triggers.yaml`.
+- Recall workflow covering `scripts/recall.py`, `/recall/trigger`, and `/recall/quarantined`, ensuring recalled SKUs are moved to a Quarantine location and logged as `recall_quarantine` events.
 
 ## [0.1.0] - 2025-10-08
 ### Added
