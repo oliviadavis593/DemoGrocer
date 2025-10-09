@@ -10,7 +10,7 @@ FoodFlow bundles the tooling needed to demonstrate a realistic grocery retail op
 
 - **packages/odoo_client** – Thin XML-RPC client that loads credentials from `.env` and shares session logic across scripts, the simulator, and the web app.
 - **scripts/seed_inventory.py** – Idempotent importer that provisions units of measure, categories, products, lots, and starting balances. The script writes a CSV summary under `out/`.
-- **services/simulator** – Orchestrates sell-down, expiry, and receiving jobs. Events flow to `out/events.jsonl` and optionally to SQLite via `packages/db`.
+- **services/simulator** – Orchestrates sell-down, returns, shrink, expiry, and receiving jobs. Events flow to `out/events.jsonl` and optionally to SQLite via `packages/db`.
 - **packages/db** – Local SQLite helpers and schema migration tooling that store simulator events for historical reporting.
 - **apps/web** – FastAPI application that surfaces diagnostics, recent events, inventory metrics, PDF label generation, and directory listings for rendered labels.
 - **services/docs/labels.py** – Markdown-to-PDF label generator used both by the API and by the `make labels-demo` helper script.
@@ -20,7 +20,7 @@ FoodFlow bundles the tooling needed to demonstrate a realistic grocery retail op
 1. Fill in `.env` with Odoo URL, database, username, and password.
 2. Run `make diagnose` to confirm connectivity and the presence of `stock.lot` and its `life_date` field.
 3. Execute `make seed` to load the demo catalog and starting inventory data.
-4. Invoke `make simulate` (single pass) or `make simulate-start` (continuous) to produce event activity.
+4. Invoke `make simulate` (single pass) or `make simulate-start` (continuous) to produce event activity. Confirm the new `returns` and `shrink` events are emitted with `tail -n 50 out/events.jsonl | grep -E '"type":"(returns|shrink)"' | head`.
 5. Launch `make web`, then browse `http://localhost:8000/` for links to health checks, events, metrics, at-risk products, and label endpoints.
 
 ## Key Make Targets

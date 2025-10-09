@@ -2,14 +2,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import List, Sequence
+from random import Random
+from typing import List, Optional, Sequence
 
 from packages.odoo_client import OdooClient
 
 from .config import SimulatorConfig
 from .events import EventWriter, SimulatorEvent
 from .inventory import InventoryRepository
-from .jobs import DailyExpiryJob, JobContext, ReceivingJob, SellDownJob
+from .jobs import DailyExpiryJob, JobContext, ReceivingJob, ReturnsJob, SellDownJob, ShrinkJob
 from .state import StateTracker
 
 
@@ -23,6 +24,7 @@ class SimulatorService:
         event_writer: EventWriter,
         state_tracker: StateTracker,
         now_fn=None,
+        rng: Optional[Random] = None,
     ) -> None:
         self.client = client
         self.config = config
@@ -30,6 +32,7 @@ class SimulatorService:
         self.state_tracker = state_tracker
         self.now_fn = now_fn or (lambda: datetime.now(timezone.utc))
         self.inventory = InventoryRepository(client)
+        self.rng = rng
 
     def run_once(self, force: bool = False) -> Sequence[SimulatorEvent]:
         now = self.now_fn()
@@ -54,7 +57,9 @@ class SimulatorService:
     def _build_jobs(self) -> Sequence:
         return [
             SellDownJob(self.config.sell_down, self.event_writer, self.client),
+            ReturnsJob(self.config.returns, self.event_writer, self.client, rng=self.rng),
             DailyExpiryJob(self.config.daily_expiry, self.event_writer, self.client),
+            ShrinkJob(self.config.shrink, self.event_writer, self.client, rng=self.rng),
             ReceivingJob(
                 self.config.receiving,
                 self.config.daily_expiry,

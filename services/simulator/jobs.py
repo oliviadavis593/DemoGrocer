@@ -1,12 +1,13 @@
 """Simulator job implementations."""
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 from .config import PerishabilityConfig, RateConfig
-from .events import SimulatorEvent
+from .events import EventHistory, SimulatorEvent
 from .inventory import InventorySnapshot
 
 
@@ -64,6 +65,113 @@ class SellDownJob(BaseJob):
                     after=after,
                 )
             )
+        self.writer.write(events)
+        return events
+
+
+class ReturnsJob(BaseJob):
+    """Restock a small amount of previously sold inventory."""
+
+    name = "returns"
+    minimum_interval: Optional[timedelta] = timedelta(hours=1)
+
+    def __init__(self, config: RateConfig, writer, client, *, rng: Optional[random.Random] = None) -> None:
+        self.config = config
+        self.writer = writer
+        self.client = client
+        self.history = EventHistory(writer.path)
+        self.rng = rng or random.Random()
+
+    def run(self, context: JobContext) -> Sequence[SimulatorEvent]:
+        outstanding = dict(self.history.outstanding_returns())
+        if not outstanding:
+            return []
+        events: List[SimulatorEvent] = []
+        for quant in context.snapshot.quants():
+            product = quant.product_name
+            available = outstanding.get(product, 0.0)
+            if available <= 0:
+                continue
+
+            probability = max(min(self.config.rate_for(quant.category), 1.0), 0.0)
+            if self.rng.random() >= probability:
+                continue
+
+            units_choice = 1.0 if available < 1.0 else float(self.rng.choice([1, 2]))
+            qty = min(units_choice, available)
+            before = quant.quantity
+            after = round(before + qty, 2)
+            if _is_close(before, after):
+                continue
+
+            self.client.write("stock.quant", quant.id, {"quantity": after})
+            context.snapshot.update_quantity(quant.id, after)
+            outstanding[product] = max(available - qty, 0.0)
+
+            events.append(
+                SimulatorEvent(
+                    ts=context.now,
+                    type=self.name,
+                    product=quant.product_name,
+                    lot=quant.lot_name,
+                    qty=after - before,
+                    before=before,
+                    after=after,
+                )
+            )
+
+        self.writer.write(events)
+        return events
+
+
+class ShrinkJob(BaseJob):
+    """Apply shrink to inventory to simulate breakage or spoilage."""
+
+    name = "shrink"
+    minimum_interval: Optional[timedelta] = timedelta(hours=6)
+
+    def __init__(self, config: RateConfig, writer, client, *, rng: Optional[random.Random] = None) -> None:
+        self.config = config
+        self.writer = writer
+        self.client = client
+        self.rng = rng or random.Random()
+
+    def run(self, context: JobContext) -> Sequence[SimulatorEvent]:
+        events: List[SimulatorEvent] = []
+        for quant in context.snapshot.quants():
+            before = quant.quantity
+            if before <= 0:
+                continue
+
+            rate = max(self.config.rate_for(quant.category), 0.0)
+            if rate <= 0:
+                continue
+
+            shrink_base = before * min(rate, 1.0)
+            shrink_randomizer = self.rng.uniform(0.5, 1.0)
+            qty = min(shrink_base * shrink_randomizer, before)
+            qty = max(round(qty, 2), 0.01)
+            if qty > before:
+                qty = before
+
+            after = max(round(before - qty, 2), 0.0)
+            if _is_close(before, after):
+                continue
+
+            self.client.write("stock.quant", quant.id, {"quantity": after})
+            context.snapshot.update_quantity(quant.id, after)
+            events.append(
+                SimulatorEvent(
+                    ts=context.now,
+                    type=self.name,
+                    product=quant.product_name,
+                    lot=quant.lot_name,
+                    qty=after - before,
+                    before=before,
+                    after=after,
+                )
+            )
+
         self.writer.write(events)
         return events
 
@@ -251,5 +359,7 @@ __all__ = [
     "SellDownJob",
     "ReceivingJob",
     "DailyExpiryJob",
+    "ReturnsJob",
+    "ShrinkJob",
     "JobContext",
 ]

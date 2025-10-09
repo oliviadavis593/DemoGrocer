@@ -89,7 +89,7 @@ make seed-staff
 # cashier_2: exists
 
 make simulate
-# INFO 2024-01-10 12:00:00,000 INFO Simulator once run emitted 6 events
+# INFO 2024-01-10 12:00:00,000 INFO Simulator once run emitted 9 events
 
 make simulate-start
 # INFO 2024-01-10 12:00:00,000 INFO Simulator scheduler tick (Ctrl+C to stop)
@@ -107,14 +107,19 @@ Each command maps to a common developer workflow:
 - `make diagnose` authenticates to Odoo and prints the database name plus capability checks for the `stock.lot` model and `life_date` field.
 - `make seed` provisions demo inventory data inside Odoo and summarizes the number of products created.
 - `make seed-staff` syncs demo cashier, department manager, and store manager accounts and records their credentials under `.out/staff_credentials.json`.
-- `make simulate` runs one simulator cycle, appending events to `out/events.jsonl` and persisting them to `out/foodflow.db`.
+- `make simulate` runs one simulator cycle, appending sell-down, returns, shrink, expiry, and receiving events to `out/events.jsonl` and persisting them to `out/foodflow.db`.
 - `make simulate-start` launches the background scheduler for continuous simulation until you stop it.
 - `make labels-demo` renders sample product labels to PDF under `out/labels`.
 - `make web` starts the FastAPI reporting server so `/health` returns 200 once the app is ready.
 
 `make simulate` and `make simulate-start` automatically migrate the local SQLite
-database so events are stored in `out/foodflow.db`. The long running targets
-(`simulate-start` and `web`) can be stopped with `Ctrl+C`.
+database so events are stored in `out/foodflow.db`. After a run you can spot-check the new activity with:
+
+```bash
+tail -n 50 out/events.jsonl | grep -E '"type":"(returns|shrink)"' | head
+```
+
+The long running targets (`simulate-start` and `web`) can be stopped with `Ctrl+C`.
 
 ### Reporting API at a Glance
 

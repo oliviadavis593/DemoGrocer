@@ -39,10 +39,10 @@ This guide walks through the repository layout so new contributors can quickly l
 ## services/
 
 - `services/simulator/` – Core simulation engine:
-  - `config.py` – Data classes and parsing logic for simulator configuration (`sell_down`, `receiving`, `daily_expiry`).
+  - `config.py` – Data classes and parsing logic for simulator configuration (`sell_down`, `returns`, `shrink`, `receiving`, `daily_expiry`).
   - `service.py` – High-level orchestration that runs jobs and coordinates persistence.
-  - `jobs.py` – Individual job implementations for sell-down, receiving, and daily expiry adjustments.
-  - `events.py` – JSONL writer and database bridge for simulator events.
+  - `jobs.py` – Individual job implementations for sell-down, returns, shrink, receiving, and daily expiry adjustments.
+  - `events.py` – JSONL writer, historical helpers (for returns accounting), and the database bridge for simulator events.
   - `inventory.py` – Odoo inventory repository for loading and mutating stock quants.
   - `state.py` & `scheduler.py` – Track job execution intervals and schedule recurring runs.
 - `services/docs/labels.py` – Markdown-based PDF label renderer with optional WeasyPrint integration and pure-Python fallback.

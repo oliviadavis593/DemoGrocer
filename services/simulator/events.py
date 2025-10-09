@@ -1,6 +1,7 @@
 """Event logging for simulator jobs."""
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -76,11 +77,61 @@ class EventWriter:
                 LOGGER.exception("Failed to persist events to database")
 
 
+class EventHistory:
+    """Utility to derive aggregates from the simulator event log."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+    def outstanding_returns(self) -> Dict[str, float]:
+        """Return the remaining quantity that may be returned per product name."""
+
+        totals: Dict[str, Dict[str, float]] = {}
+        if not self.path.exists():
+            return {}
+        try:
+            with self.path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    record = _parse_json_line(line)
+                    if not record or record.get("source") != "simulator":
+                        continue
+                    product = str(record.get("product"))
+                    if not product:
+                        continue
+                    event_type = record.get("type")
+                    qty = float(record.get("qty", 0.0) or 0.0)
+                    entry = totals.setdefault(product, {"sold": 0.0, "returned": 0.0})
+                    if event_type == "sell_down":
+                        entry["sold"] += max(-qty, 0.0)
+                    elif event_type == "returns":
+                        entry["returned"] += max(qty, 0.0)
+        except OSError:
+            LOGGER.exception("Failed to read simulator event history from %s", self.path)
+            return {}
+        outstanding: Dict[str, float] = {}
+        for product, values in totals.items():
+            remaining = values["sold"] - values["returned"]
+            if remaining > 0:
+                outstanding[product] = remaining
+        return outstanding
+
+
 def _json_line(payload: Mapping[str, object]) -> str:
     # Avoid bringing in the json module for a single dump - implement minimal writer
-    import json
-
     return json.dumps(payload, separators=(",", ":"), sort_keys=True)
 
 
-__all__ = ["SimulatorEvent", "EventWriter"]
+def _parse_json_line(line: str) -> Optional[Mapping[str, object]]:
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        parsed = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, Mapping):
+        return parsed
+    return None
+
+
+__all__ = ["SimulatorEvent", "EventWriter", "EventHistory"]

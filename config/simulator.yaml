@@ -7,6 +7,13 @@ sell_down:
     Deli: 0.06
     Bakery: 0.05
     Frozen: 0.04
+returns:
+  default: 0.04
+  category_rates:
+    Produce: 0.1
+    Dairy: 0.08
+    Meat: 0.05
+    Center Store: 0.03
 receiving:
   default: 2.0
   category_rates:
@@ -15,6 +22,15 @@ receiving:
     Meat: 4.0
     Center Store: 6.0
     Frozen: 3.0
+shrink:
+  default: 0.015
+  category_rates:
+    Produce: 0.025
+    Dairy: 0.03
+    Meat: 0.02
+    Deli: 0.02
+    Bakery: 0.018
+    Frozen: 0.012
 daily_expiry:
   default: 10
   perishability:

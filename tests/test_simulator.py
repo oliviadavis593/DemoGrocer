@@ -1,8 +1,10 @@
 """Tests for the simulator service."""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from random import Random
 from tempfile import TemporaryDirectory
 from typing import Dict, Iterable, List, Optional
 from unittest import TestCase
@@ -160,7 +162,9 @@ class SimulatorServiceTests(TestCase):
         self.config = SimulatorConfig.from_mapping(
             {
                 "sell_down": {"default": 0.1, "category_rates": {"Produce": 0.2}},
+                "returns": {"default": 1.0},
                 "receiving": {"default": 4.0, "category_rates": {"Produce": 8.0}},
+                "shrink": {"default": 0.1, "category_rates": {"Produce": 0.2}},
                 "daily_expiry": {"default": 5, "perishability": {"Dairy": 2}},
             }
         )
@@ -181,15 +185,16 @@ class SimulatorServiceTests(TestCase):
             self.writer,
             self.state,
             now_fn=lambda: self.now,
+            rng=Random(0),
         )
 
     def test_once_runs_all_jobs(self) -> None:
         service = self._service()
         events = service.run_once(force=True)
-        self.assertEqual(len(events), 6)
+        self.assertEqual(len(events), 9)
 
-        # Sell down reduces stock, expiry trims further, then receiving replenishes.
-        self.assertAlmostEqual(self.client._quants[1]["quantity"], 24.0, places=2)
+        # Sell down reduces stock, returns add back a little, expiry & shrink trim, receiving replenishes.
+        self.assertAlmostEqual(self.client._quants[1]["quantity"], 22.1, places=2)
         self.assertAlmostEqual(self.client._quants[2]["quantity"], 4.0, places=2)
 
         # The dairy item was expired and should receive a fresh lot.
@@ -198,9 +203,42 @@ class SimulatorServiceTests(TestCase):
         self.assertNotEqual(self.client._lots[dairy_lot]["name"], "LOT-202")
         self.assertTrue(any(call["model"] == "stock.lot" for call in self.client.create_calls))
 
+        event_types = {event.type for event in events}
+        self.assertIn("returns", event_types)
+        self.assertIn("shrink", event_types)
+
+    def test_returns_never_exceed_total_sold(self) -> None:
+        service = self._service()
+        events = service.run_once(force=True)
+
+        totals: Dict[str, Dict[str, float]] = {}
+        for event in events:
+            if event.type not in {"sell_down", "returns"}:
+                continue
+            product_totals = totals.setdefault(event.product, {"sold": 0.0, "returned": 0.0})
+            if event.type == "sell_down":
+                product_totals["sold"] += max(-event.qty, 0.0)
+            elif event.type == "returns":
+                product_totals["returned"] += max(event.qty, 0.0)
+
+        for product, summary in totals.items():
+            self.assertLessEqual(summary["returned"], summary["sold"] + 1e-6, product)
+
+        # File log should also reflect returns events for later runs.
+        with self.events_path.open("r", encoding="utf-8") as handle:
+            history = [json.loads(line) for line in handle if line.strip()]
+        self.assertTrue(any(entry["type"] == "returns" for entry in history))
+
+    def test_shrink_never_makes_negative_quantities(self) -> None:
+        service = self._service()
+        service.run_once(force=True)
+
+        for quant in self.client._quants.values():
+            self.assertGreaterEqual(quant["quantity"], 0.0)
+
         with self.events_path.open("r", encoding="utf-8") as handle:
             lines = handle.readlines()
-        self.assertEqual(len(lines), 6)
+        self.assertEqual(len(lines), 9)
         self.assertTrue(all("\"source\":\"simulator\"" in line for line in lines))
 
     def test_daily_job_respects_interval(self) -> None:
@@ -225,7 +263,7 @@ class SimulatorServiceTests(TestCase):
         # First tick runs all jobs; second tick should skip daily expiry only.
         with self.events_path.open("r", encoding="utf-8") as handle:
             lines = handle.readlines()
-        self.assertEqual(len(lines), 10)
+        self.assertEqual(len(lines), 13)
 
         events = service.run_once(force=False)
         self.assertEqual(len(events), 4)

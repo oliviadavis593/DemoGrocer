@@ -68,14 +68,18 @@ class SimulatorConfig:
     """Top-level configuration for the simulator service."""
 
     sell_down: RateConfig = field(default_factory=RateConfig)
+    returns: RateConfig = field(default_factory=RateConfig)
     receiving: RateConfig = field(default_factory=RateConfig)
+    shrink: RateConfig = field(default_factory=RateConfig)
     daily_expiry: PerishabilityConfig = field(default_factory=PerishabilityConfig)
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object]) -> "SimulatorConfig":
         return cls(
             sell_down=RateConfig.from_mapping(_get_mapping(data, "sell_down")),
+            returns=RateConfig.from_mapping(_get_mapping(data, "returns")),
             receiving=RateConfig.from_mapping(_get_mapping(data, "receiving")),
+            shrink=RateConfig.from_mapping(_get_mapping(data, "shrink")),
             daily_expiry=PerishabilityConfig.from_mapping(
                 _get_mapping(data, "daily_expiry")
             ),
