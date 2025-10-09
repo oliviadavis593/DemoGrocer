@@ -8,7 +8,7 @@ FoodFlow is a developer sandbox that showcases how an Odoo-backed grocery retail
 - A FastAPI reporting service exposing recent events, at-risk products, metrics, and label generation.
 - Supporting scripts and Make targets that streamline diagnostics, database migrations, and PDF label previews.
 
-See [`docs/overview.md`](docs/overview.md) for an architectural tour of the key packages and workflows.
+See [`docs/overview.md`](docs/overview.md) for an architectural tour and [`docs/structure.md`](docs/structure.md) for a directory-by-directory breakdown.
 
 ## Odoo Inventory Seeder
 
