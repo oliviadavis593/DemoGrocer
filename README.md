@@ -73,6 +73,15 @@ curl -s "http://localhost:8000/events/recent?limit=5"
 curl -s "http://localhost:8000/at-risk?days=3"
 # {"items":[{"default_code":"FF101","product":"Whole Milk","lot":"LOT-FF101","days_left":2,"quantity":5.0}],
 #  "meta":{"days":3,"count":1}}
+
+curl -s -X POST "http://localhost:8000/labels/markdown" \
+  -H "Content-Type: application/json" \
+  -d '{"default_codes":["FF101","FF102"]}'
+# {"labels":[{"default_code":"FF101","path":"out/labels/FF101.pdf",...}],
+#  "meta":{"count":2,"output_dir":"out/labels"}}
+
+curl -s "http://localhost:8000/out/labels/"
+# {"labels":[{"filename":"FF101.pdf","path":"out/labels/FF101.pdf",...}], "meta":{"count":2,"exists":true}}
 ```
 
 If `out/events.jsonl` is missing or contains invalid JSON, the API returns

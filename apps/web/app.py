@@ -7,11 +7,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import JSONResponse
 
 from packages.db import EventStore
 from packages.odoo_client import OdooClient, OdooClientError
+from services.docs import MarkdownLabelGenerator
 from services.simulator.inventory import InventoryRepository
 
 from .data import (
@@ -26,6 +27,7 @@ EventsPathProvider = Callable[[], Path]
 RepositoryFactory = Callable[[], Optional[InventoryRepository]]
 OdooClientProvider = Callable[[], Optional[OdooClient]]
 EventStoreProvider = Callable[[], EventStore]
+LabelsPathProvider = Callable[[], Path]
 
 _DURATION_RE = re.compile(r"^(?P<value>\d+)(?P<unit>[dhm])$")
 
@@ -37,6 +39,7 @@ def create_app(
     odoo_client_provider: OdooClientProvider | None = None,
     event_store_provider: EventStoreProvider | None = None,
     logger: logging.Logger | None = None,
+    labels_path_provider: LabelsPathProvider | None = None,
 ) -> FastAPI:
     """Construct the FastAPI application."""
 
@@ -45,6 +48,7 @@ def create_app(
     repository_provider = repository_factory or _default_repository_factory
     odoo_provider = odoo_client_provider or _default_odoo_client
     store_provider = event_store_provider or _default_event_store
+    labels_provider = labels_path_provider or _default_labels_path
 
     app = FastAPI(title="FoodFlow Reporting API")
 
@@ -190,6 +194,78 @@ def create_app(
         meta["count"] = len(payload)
         return {"items": payload, "meta": meta}
 
+    @app.post("/labels/markdown", response_class=JSONResponse)
+    def markdown_labels(default_codes: object = None) -> dict[str, object]:
+        if default_codes is None:
+            raise HTTPException(400, {"default_codes": "provide JSON body with default_codes list"})
+        if not isinstance(default_codes, list):
+            raise HTTPException(400, {"default_codes": "expected list of product codes"})
+        codes: list[str] = []
+        for value in default_codes:
+            if not isinstance(value, str):
+                raise HTTPException(400, {"default_codes": "all codes must be strings"})
+            trimmed = value.strip()
+            if not trimmed:
+                continue
+            if trimmed not in codes:
+                codes.append(trimmed)
+        if not codes:
+            raise HTTPException(400, {"default_codes": "provide at least one product code"})
+
+        client = odoo_provider()
+        if client is None:
+            app_logger.error("Cannot generate labels: Odoo client unavailable")
+            return {
+                "labels": [],
+                "links": {},
+                "meta": {
+                    "error": "odoo_unreachable",
+                    "requested": codes,
+                },
+            }
+
+        output_dir = labels_provider()
+        generator = MarkdownLabelGenerator(client, output_dir=output_dir)
+        try:
+            documents = generator.generate(codes)
+        except Exception:
+            app_logger.exception("Failed to generate label PDFs")
+            return {
+                "labels": [],
+                "links": {},
+                "meta": {
+                    "error": "label_generation_failed",
+                    "requested": codes,
+                },
+            }
+
+        links = {doc.default_code: str(doc.pdf_path) for doc in documents}
+        generated_at = (
+            documents[0].generated_at.isoformat() if documents else datetime.now(timezone.utc).isoformat()
+        )
+        meta: dict[str, object] = {
+            "requested": codes,
+            "count": len(documents),
+            "missing": [doc.default_code for doc in documents if not doc.found],
+            "generated_at": generated_at,
+            "output_dir": str(output_dir),
+        }
+        return {
+            "labels": [doc.to_dict() for doc in documents],
+            "links": links,
+            "meta": meta,
+        }
+
+    @app.get("/out/labels", response_class=JSONResponse)
+    def labels_index_no_slash() -> dict[str, object]:
+        output_dir = labels_provider()
+        return _labels_directory_listing(output_dir)
+
+    @app.get("/out/labels/", response_class=JSONResponse)
+    def labels_index() -> dict[str, object]:
+        output_dir = labels_provider()
+        return _labels_directory_listing(output_dir)
+
     return app
 
 
@@ -304,6 +380,44 @@ def _default_repository_factory() -> InventoryRepository | None:
     if client is None:
         return None
     return InventoryRepository(client)
+
+
+def _default_labels_path() -> Path:
+    return Path("out/labels")
+
+
+def _labels_directory_listing(directory: Path) -> dict[str, object]:
+    if not directory.exists():
+        return {
+            "labels": [],
+            "meta": {
+                "exists": False,
+                "count": 0,
+                "output_dir": str(directory),
+            },
+        }
+    items: list[dict[str, object]] = []
+    for pdf_path in sorted(directory.glob("*.pdf")):
+        try:
+            stat = pdf_path.stat()
+        except OSError:
+            continue
+        items.append(
+            {
+                "filename": pdf_path.name,
+                "path": str(pdf_path),
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            }
+        )
+    return {
+        "labels": items,
+        "meta": {
+            "exists": True,
+            "count": len(items),
+            "output_dir": str(directory),
+        },
+    }
 
 
 __all__ = ["create_app"]

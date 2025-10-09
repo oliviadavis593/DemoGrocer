@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Tuple
 from urllib.parse import parse_qs
@@ -61,11 +62,32 @@ class FastAPI:
 
         return decorator
 
+    def post(
+        self, path: str, *, response_class: Optional[type] = None
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            self.routes[(path, "POST")] = Route(path, "POST", func, response_class)
+            return func
+
+        return decorator
+
     # Request handling -------------------------------------------------------------------
-    def _call(self, func: Callable[..., Any], params: Optional[Mapping[str, Any]] = None) -> Any:
+    def _call(
+        self,
+        func: Callable[..., Any],
+        params: Optional[Mapping[str, Any]] = None,
+        body: Any = None,
+    ) -> Any:
         sig = inspect.signature(func)
         kwargs: Dict[str, Any] = {}
-        params = params or {}
+        params = dict(params or {})
+        body_params: Mapping[str, Any]
+        if isinstance(body, Mapping):
+            body_params = body  # type: ignore[assignment]
+        elif body is None:
+            body_params = {}
+        else:
+            body_params = {"body": body}
         for name, parameter in sig.parameters.items():
             default = parameter.default
             annotation = parameter.annotation
@@ -80,9 +102,14 @@ class FastAPI:
                     raise HTTPException(422, {name: f"must be <= {default.le}"})
                 kwargs[name] = value
             else:
-                if default is inspect._empty:
+                if name in body_params:
+                    kwargs[name] = body_params[name]
+                elif name in params:
+                    kwargs[name] = params[name]
+                elif default is inspect._empty:
                     raise HTTPException(400, f"Missing required parameter '{name}'")
-                kwargs[name] = default
+                else:
+                    kwargs[name] = default
         return func(**kwargs)
 
     def _resolve_dependency(self, depends: Depends) -> Any:
@@ -113,13 +140,19 @@ class FastAPI:
             return responses.JSONResponse(content=list(result))
         return responses.HTMLResponse(content=str(result))
 
-    def _handle_request(self, method: str, path: str, params: Optional[Mapping[str, Any]] = None) -> responses.ClientResponse:
+    def _handle_request(
+        self,
+        method: str,
+        path: str,
+        params: Optional[Mapping[str, Any]] = None,
+        body: Any = None,
+    ) -> responses.ClientResponse:
         route = self.routes.get((path, method.upper()))
         if not route:
             response = responses.JSONResponse(content={"detail": "Not found"}, status_code=404)
             return responses.ClientResponse.from_response(response)
         try:
-            result = self._call(route.handler, params)
+            result = self._call(route.handler, params, body)
             response = self._build_response(result, route.response_class)
         except HTTPException as exc:
             response = responses.JSONResponse(content={"detail": exc.detail}, status_code=exc.status_code)
@@ -161,13 +194,38 @@ class FastAPI:
         method = scope.get("method", "GET").upper()
         path = scope.get("path", "/")
         raw_query = scope.get("query_string", b"")
-        query_params = {}
+        query_params: Dict[str, Any] = {}
         if raw_query:
             parsed = parse_qs(raw_query.decode())
             query_params = {key: values[-1] for key, values in parsed.items() if values}
 
+        body_data: Any = None
+        if method in {"POST", "PUT", "PATCH"}:
+            body_bytes = b""
+            more_body = True
+            while more_body:
+                message = await receive()
+                message_type = message.get("type")
+                if message_type != "http.request":
+                    continue
+                body_bytes += message.get("body", b"")
+                more_body = message.get("more_body", False)
+            if body_bytes:
+                content_type = ""
+                for header_key, header_value in scope.get("headers", []):
+                    if header_key.lower() == b"content-type":
+                        content_type = header_value.decode().lower()
+                        break
+                if "application/json" in content_type:
+                    try:
+                        body_data = json.loads(body_bytes.decode())
+                    except json.JSONDecodeError:
+                        body_data = None
+                else:
+                    body_data = body_bytes.decode()
+
         try:
-            client_response = self._handle_request(method, path, query_params)
+            client_response = self._handle_request(method, path, query_params, body_data)
             body = client_response.text.encode("utf-8")
             status_code = client_response.status_code
             media_type = client_response.media_type.encode("latin-1")

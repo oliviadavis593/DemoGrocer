@@ -42,7 +42,7 @@ class OdooClientConfig:
         missing: List[str] = []
         env_map = {
             "url": os.getenv("ODOO_URL"),
-            "database": os.getenv("ODOO_DATABASE") or os.getenv("ODOO_DB"),
+            "database": os.getenv("ODOO_DB") or os.getenv("ODOO_DATABASE"),
             "username": os.getenv("ODOO_USERNAME"),
             "password": os.getenv("ODOO_PASSWORD"),
         }

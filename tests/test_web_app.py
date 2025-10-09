@@ -273,6 +273,100 @@ def test_at_risk_falls_back_to_expiration_date() -> None:
     assert payload["items"][0]["default_code"] == "BAN-1"
 
 
+def test_markdown_labels_generate_pdfs(tmp_path: Path) -> None:
+    output_dir = tmp_path / "labels"
+
+    class FakeClient:
+        def search_read(self, model, domain, fields=None, limit=None, order=None):
+            assert model == "product.product"
+            return [
+                {
+                    "id": 10,
+                    "name": "Gala Apples",
+                    "default_code": "FF101",
+                    "barcode": "1234567890123",
+                    "categ_id": [1, "Produce"],
+                    "description": "Sweet and crisp apples.",
+                },
+                {
+                    "id": 11,
+                    "name": "Whole Milk",
+                    "default_code": "FF102",
+                    "categ_id": [2, "Dairy"],
+                },
+            ]
+
+    app = create_app(
+        events_path_provider=lambda: tmp_path / "events.jsonl",
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: FakeClient(),
+        labels_path_provider=lambda: output_dir,
+    )
+    client = TestClient(app)
+
+    response = client.post("/labels/markdown", json={"default_codes": ["FF101", "FF102"]})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["meta"]["count"] == 2
+    assert payload["links"]["FF101"].endswith("FF101.pdf")
+    assert (output_dir / "FF101.pdf").exists()
+    assert (output_dir / "FF102.pdf").exists()
+    for label in payload["labels"]:
+        pdf_path = Path(label["path"])
+        assert pdf_path.exists()
+        assert pdf_path.read_bytes().startswith(b"%PDF")
+
+    index_resp = client.get("/out/labels/")
+    assert index_resp.status_code == 200
+    index_payload = index_resp.json()
+    assert index_payload["meta"]["count"] == 2
+    filenames = {item["filename"] for item in index_payload["labels"]}
+    assert filenames == {"FF101.pdf", "FF102.pdf"}
+
+
+def test_markdown_labels_validates_payload() -> None:
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+    )
+    client = TestClient(app)
+
+    resp = client.post("/labels/markdown", json={"default_codes": []})
+    assert resp.status_code == 400
+    error = resp.json()
+    assert error["detail"]["default_codes"]
+
+
+def test_markdown_labels_requires_body() -> None:
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+    )
+    client = TestClient(app)
+
+    resp = client.post("/labels/markdown")
+    assert resp.status_code == 400
+    error = resp.json()
+    assert error["detail"]["default_codes"]
+
+
+def test_labels_index_handles_missing_directory(tmp_path: Path) -> None:
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        labels_path_provider=lambda: tmp_path / "labels",
+    )
+    client = TestClient(app)
+
+    resp = client.get("/out/labels/")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["meta"]["exists"] is False
+    assert payload["meta"]["count"] == 0
+    assert payload["labels"] == []
+
+
+
 def test_events_endpoint_filters_by_type_and_since(tmp_path: Path) -> None:
     db_path = tmp_path / "events.db"
     run_migration(db_path)

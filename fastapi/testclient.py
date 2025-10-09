@@ -14,3 +14,12 @@ class TestClient:
 
     def get(self, path: str, params: Optional[Mapping[str, Any]] = None):
         return self.app._handle_request("GET", path, params)
+
+    def post(
+        self,
+        path: str,
+        *,
+        params: Optional[Mapping[str, Any]] = None,
+        json: Any = None,
+    ):
+        return self.app._handle_request("POST", path, params, json)
