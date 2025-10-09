@@ -66,4 +66,21 @@ Although located alongside the web app, this module deserves a call-out:
 - `out/labels/` – Directory filled with PDF labels generated via API calls or `make labels-demo`.
 - `out/seed_summary.csv` – Summary of the seeded inventory written by the seeding script.
 
-Use this guide alongside `docs/overview.md` to understand both the bird’s-eye view and the concrete file responsibilities.***
+Use this guide alongside `docs/overview.md` to understand both the bird’s-eye view and the concrete file responsibilities.
+
+## Reporting API Endpoints
+
+The FastAPI service in `apps/web` exposes the following JSON endpoints:
+
+| Route | Method | Purpose |
+| ----- | ------ | ------- |
+| `/` | GET | Landing document confirming the server is up and pointing developers toward the most useful endpoints. |
+| `/health` | GET | Simple heartbeat returning `{"status": "ok"}` so monitors or smoke tests can verify the app instantly. |
+| `/events/recent` | GET | Streams the latest simulator activity from `out/events.jsonl`, making it easy to confirm the jobs are emitting events in real time. |
+| `/events` | GET | Audits historical inventory movements stored in SQLite; supports filters to investigate specific event types or time windows. |
+| `/metrics/summary` | GET | Provides high-level counts that help track simulator throughput and spot unexpected spikes or gaps. |
+| `/at-risk` | GET | Surfaces lots that are approaching expiry so operators know which products need action inside Odoo. |
+| `/labels/markdown` | POST | Generates printable PDF labels for provided `default_codes`, useful for spot-checking or demo scenarios. |
+| `/out/labels/` | GET | Lists generated label PDFs so you can quickly download or inspect the latest artifacts under `out/labels`. |
+
+Routes depend on shared helpers: the `OdooClient` for live data and `EventStore` for persisted simulator events.
