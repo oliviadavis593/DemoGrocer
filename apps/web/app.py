@@ -31,6 +31,7 @@ except ModuleNotFoundError:  # pragma: no cover - lightweight fallback
 from packages.db import EventStore
 from packages.odoo_client import OdooClient, OdooClientError
 from services.docs import MarkdownLabelGenerator
+from services.integration.odoo_service import OdooService
 from services.recall import QuarantinedItem, RecallResult, RecallService
 from services.simulator.events import EventWriter
 from services.simulator.inventory import InventoryRepository
@@ -471,9 +472,8 @@ def _default_event_store() -> EventStore:
 def _default_odoo_client() -> OdooClient | None:
     logger = logging.getLogger("foodflow.web")
     try:
-        client = OdooClient()
-        client.authenticate()
-        return client
+        service = OdooService(logger=logger.getChild("integration"))
+        return service.client()
     except OdooClientError:
         logger.exception("Failed to authenticate default Odoo client")
         return None
@@ -483,10 +483,16 @@ def _default_odoo_client() -> OdooClient | None:
 
 
 def _default_repository_factory() -> InventoryRepository | None:
-    client = _default_odoo_client()
-    if client is None:
+    logger = logging.getLogger("foodflow.web")
+    service = OdooService(logger=logger.getChild("integration"))
+    try:
+        return service.inventory_repository()
+    except OdooClientError:
+        logger.exception("Failed to authenticate default Odoo client")
         return None
-    return InventoryRepository(client)
+    except Exception:
+        logger.exception("Unexpected error creating default inventory repository")
+        return None
 
 
 def _default_labels_path() -> Path:

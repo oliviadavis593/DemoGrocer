@@ -12,9 +12,10 @@ This guide walks through the repository layout so new contributors can quickly l
 | `fastapi/` | Minimal FastAPI wrapper for alternative deployments. |
 | `packages/` | Reusable Python packages shared across scripts and services (`db`, `odoo_client`). |
 | `scripts/` | Command-line utilities for seeding, diagnostics, migrations, and demos. |
-| `services/` | Domain services for the simulator, reporting helpers, and label generation. |
+| `services/` | Domain services for the simulator, integration tooling, reporting helpers, and label generation. |
 | `tests/` | Pytest suites covering the simulator, web API, and supporting utilities. |
 | `out/` | Generated artifacts (JSONL logs, CSV summaries, SQLite database, PDF labels). |
+| `.github/` | Continuous-integration workflows, including the scheduled integration sync. |
 
 ## apps/
 
@@ -46,6 +47,7 @@ This guide walks through the repository layout so new contributors can quickly l
   - `events.py` – JSONL writer, historical helpers (for returns accounting), and the database bridge for simulator events.
   - `inventory.py` – Odoo inventory repository for loading and mutating stock quants.
   - `state.py` & `scheduler.py` – Track job execution intervals and schedule recurring runs.
+- `services/integration/` – Shared integration runner wiring that authenticates with Odoo once, exposes an inventory repository, and offers a CLI for sync cycles.
 - `services/analysis/` – Post-processing helpers such as `shrink_triggers.py`, which emits `flag_low_movement` and `flag_overstock` events based on recent sales velocity.
 - `services/recall/` – Recall orchestration utilities shared by the CLI and API routes for quarantining stock.
 - `services/docs/labels.py` – Markdown-based PDF label renderer with optional WeasyPrint integration and pure-Python fallback.

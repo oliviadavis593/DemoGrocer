@@ -13,6 +13,7 @@ FoodFlow bundles the tooling needed to demonstrate a realistic grocery retail op
 - **services/simulator** – Orchestrates sell-down, returns, shrink, expiry, and receiving jobs. Events flow to `out/events.jsonl` and optionally to SQLite via `packages/db`.
 - **services/analysis/shrink_triggers.py** – Evaluates recent sales history against configurable thresholds to emit `flag_low_movement` and `flag_overstock` analysis events during simulator ticks.
 - **services/recall** – Provides helpers to quarantine products, ensuring `recall_quarantine` events and the `Quarantine` location stay in sync for both CLI and API triggers.
+- **services/integration** – Houses the integration runner CLI plus a reusable `OdooService` wrapper that authenticates once and shares inventory access across the API, jobs, and automation hooks.
 - **packages/db** – Local SQLite helpers and schema migration tooling that store simulator events for historical reporting.
 - **apps/web** – FastAPI application that surfaces diagnostics, recent events, inventory metrics, PDF label generation, and directory listings for rendered labels.
 - **services/docs/labels.py** – Markdown-to-PDF label generator used both by the API and by the `make labels-demo` helper script.
@@ -25,8 +26,10 @@ FoodFlow bundles the tooling needed to demonstrate a realistic grocery retail op
 4. Invoke `make simulate` (single pass) or `make simulate-start` (continuous) to produce event activity. Confirm the new movement and analysis events with:
    - `tail -n 50 out/events.jsonl | grep -E '"type":"(returns|shrink|flag_low_movement|flag_overstock)"' | head`
    - `curl -s "http://localhost:8000/events?type=flag_low_movement&since=7d" | head`
-5. Launch `make web`, then browse `http://localhost:8000/` for links to health checks, events, metrics, at-risk products, and label endpoints.
-6. Use `PYTHONPATH=. python3 scripts/recall.py --codes FF101` to quarantine recalled SKUs and confirm the results with `curl -s "http://localhost:8000/recall/quarantined" | head`.
+5. Run `make integration-sync` to exercise the integration runner and capture a sample of live inventory quants in the logs (helpful for automation smoke tests).
+6. Launch `make web`, then browse `http://localhost:8000/` for links to health checks, events, metrics, at-risk products, and label endpoints.
+7. Use `PYTHONPATH=. python3 scripts/recall.py --codes FF101` to quarantine recalled SKUs and confirm the results with `curl -s "http://localhost:8000/recall/quarantined" | head`.
+8. Enable the scheduled GitHub Action (`.github/workflows/integration-sync.yml`) so the integration sync runs daily and notifies you if Odoo authentication or queries start failing.
 
 ## Key Make Targets
 
@@ -36,6 +39,7 @@ FoodFlow bundles the tooling needed to demonstrate a realistic grocery retail op
 | `make seed` | Loads demo products, lots, and quantities; yields a CSV summary. |
 | `make simulate` | Runs one simulator cycle and records events. |
 | `make simulate-start` | Starts the scheduler for continuous simulation (Ctrl+C to stop). |
+| `make integration-sync` | Executes the integration service runner to log a snapshot of inventory quants. |
 | `make web` | Serves the FastAPI reporting layer on port 8000. |
 | `make labels-demo` | Generates sample PDF labels for demo SKUs in `out/labels`. |
 
@@ -47,3 +51,4 @@ FoodFlow bundles the tooling needed to demonstrate a realistic grocery retail op
 - `services/` – Domain services including the simulator and label rendering helper.
 - `tests/` – Pytest suites covering simulator logic, web endpoints, and utilities.
 - `out/` – Generated artifacts such as JSONL event logs, PDFs, CSV summaries, and the SQLite database.
+- `.github/workflows/` – CI automation including the scheduled integration sync workflow that runs `make integration-sync`.

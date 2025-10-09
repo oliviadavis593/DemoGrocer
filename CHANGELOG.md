@@ -9,9 +9,11 @@ All notable changes to this project will be documented in this file.
 - Markdown label PDF generation service exposed via `/labels/markdown` and browsable at `/out/labels/`, producing WeasyPrint-compatible templates saved under `out/labels/`.
 - Developer UX polish with expanded Make targets (`diagnose`, `seed`, `simulate`, `simulate-start`, `web`, `labels-demo`), improved diagnostics output, and README quick-start coverage for each workflow.
 - Repository overview section and documentation (`docs/overview.md`, `docs/structure.md`) outlining architecture, directory responsibilities, key Make targets, and reporting API endpoints.
-- Simulator jobs for customer returns and shrinkage that append JSONL/DB events while keeping on-hand quantities non-negative.
+- Simulator jobs for customer returns and shrinkage that append  JSONL/DB events while keeping on-hand quantities non-negative.
 - Shrink trigger detector that raises `flag_low_movement` and `flag_overstock` events from simulator ticks using configurable thresholds in `config/shrink_triggers.yaml`.
 - Recall workflow covering `scripts/recall.py`, `/recall/trigger`, and `/recall/quarantined`, ensuring recalled SKUs are moved to a Quarantine location and logged as `recall_quarantine` events.
+- Integration service scaffolding with reusable Odoo wrapper, package config, CLI runner, and shared API wiring for inventory sync cycles.
+- Scheduled GitHub Actions workflow that runs `make integration-sync` for automated Odoo connectivity checks once repository secrets are configured.
 
 ## [0.1.0] - 2025-10-08
 ### Added

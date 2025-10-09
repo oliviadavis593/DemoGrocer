@@ -1,0 +1,5 @@
+# Default settings for the integration service runner.
+log_level: INFO
+inventory:
+  summary_limit: 5
+  lot_expiry_field: null

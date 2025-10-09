@@ -1,4 +1,4 @@
-.PHONY: seed seed-staff diagnose simulate simulate-start web labels-demo migrate
+.PHONY: seed seed-staff diagnose simulate simulate-start integration-sync web labels-demo migrate
 
 PYTHON ?= python3
 RUN := PYTHONPATH=. $(PYTHON)
@@ -17,6 +17,9 @@ simulate: migrate
 
 simulate-start: migrate
 	@$(RUN) -m services.simulator.run start
+
+integration-sync:
+	@$(RUN) services/integration/runner.py sync
 
 web:
 	@$(RUN) -m apps.web.main

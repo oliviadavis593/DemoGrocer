@@ -96,6 +96,9 @@ make simulate
 make simulate-start
 # INFO 2024-01-10 12:00:00,000 INFO Simulator scheduler tick (Ctrl+C to stop)
 
+make integration-sync
+# INFO 2024-01-10 12:00:00,000 INFO Integration cycle complete: 42 quants fetched at 2024-01-10T12:00:00+00:00
+
 make labels-demo
 # Generating labels for 2 product codes
 # Output directory: out/labels
@@ -111,6 +114,7 @@ Each command maps to a common developer workflow:
 - `make seed-staff` syncs demo cashier, department manager, and store manager accounts and records their credentials under `.out/staff_credentials.json`.
 - `make simulate` runs one simulator cycle, appending sell-down, returns, shrink, expiry, receiving, and analysis flag events to `out/events.jsonl` while persisting everything to `out/foodflow.db`.
 - `make simulate-start` launches the background scheduler for continuous simulation until you stop it.
+- `make integration-sync` authenticates with Odoo using the new integration service and logs a summary of on-hand inventory fetched during the cycle.
 - `make labels-demo` renders sample product labels to PDF under `out/labels`.
 - `make web` starts the FastAPI reporting server so `/health` returns 200 once the app is ready.
 
@@ -148,6 +152,14 @@ curl -s "http://localhost:8000/recall/quarantined" | jq
 Adjust thresholds or disable recall monitoring by editing `config/shrink_triggers.yaml` and rerunning the simulator or recall script as needed.
 
 The long running targets (`simulate-start` and `web`) can be stopped with `Ctrl+C`.
+
+### Automation & Monitoring
+
+The repository ships with a scheduled GitHub Actions workflow (`.github/workflows/integration-sync.yml`) that executes `make integration-sync` every morning at 08:00 UTC and on demand via the workflow dispatch UI. To enable it:
+
+1. In the repository settings, add the following secrets sourced from your target Odoo environment: `ODOO_URL`, `ODOO_DB`, `ODOO_USERNAME`, and `ODOO_PASSWORD`.
+2. Ensure the integration runner can reach Odoo from GitHub-hosted runners (firewall/allowlist as needed).
+3. Monitor the Actions tab for failures; notifications alert you if authentication or inventory fetches fail, providing early warning that upstream Odoo credentials or connectivity need attention.
 
 ### Reporting API at a Glance
 
