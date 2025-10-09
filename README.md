@@ -3,6 +3,7 @@
 ## Overview
 
 FoodFlow is a developer sandbox that showcases how an Odoo-backed grocery retailer could seed, simulate, and monitor inventory data end to end. The repository includes:
+- Staff seeding utilities that provision demo user accounts with pre-configured roles for store workflows.
 - Inventory seeding utilities that provision demo products, lots, and stock levels in Odoo.
 - A simulator that applies daily sales, expiry, and receiving patterns while logging events to JSONL and SQLite.
 - A FastAPI reporting service exposing recent events, at-risk products, metrics, and label generation.
@@ -57,6 +58,19 @@ hundred products, traceable lots, and starting quantities in the "Backroom" and
 "Sales Floor" locations. A summary of the seeded data is written to
 `out/seed_summary.csv`.
 
+### Seeding staff accounts
+
+Provision demo staff users with predefined roles and group memberships:
+
+```bash
+make seed-staff
+# cashier_1: created
+# cashier_2: exists
+# ...
+```
+
+The script creates cashier, department manager, and store manager accounts, assigns the appropriate Odoo groups via XML IDs, and writes passwords to `.out/staff_credentials.json`. Subsequent runs preserve existing passwords while updating group assignments as needed.
+
 ### Quick Make Targets
 
 Common workflows are available as single-command Make targets:
@@ -69,6 +83,10 @@ make diagnose
 
 make seed
 # Seeded 105 products. Summary written to out/seed_summary.csv.
+
+make seed-staff
+# cashier_1: created
+# cashier_2: exists
 
 make simulate
 # INFO 2024-01-10 12:00:00,000 INFO Simulator once run emitted 6 events
@@ -88,6 +106,7 @@ make web
 Each command maps to a common developer workflow:
 - `make diagnose` authenticates to Odoo and prints the database name plus capability checks for the `stock.lot` model and `life_date` field.
 - `make seed` provisions demo inventory data inside Odoo and summarizes the number of products created.
+- `make seed-staff` syncs demo cashier, department manager, and store manager accounts and records their credentials under `.out/staff_credentials.json`.
 - `make simulate` runs one simulator cycle, appending events to `out/events.jsonl` and persisting them to `out/foodflow.db`.
 - `make simulate-start` launches the background scheduler for continuous simulation until you stop it.
 - `make labels-demo` renders sample product labels to PDF under `out/labels`.

@@ -3,6 +3,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 ### Added
+- Staff seeding script and `make seed-staff` target for provisioning demo cashier, department manager, and store manager accounts with credentials exported to `.out/staff_credentials.json`.
 - SQLite-backed event store with migration tooling, simulator persistence, and new `/events` plus `/metrics/summary` API endpoints for querying inventory activity.
 - Markdown label PDF generation service exposed via `/labels/markdown` and browsable at `/out/labels/`, producing WeasyPrint-compatible templates saved under `out/labels/`.
 - Developer UX polish with expanded Make targets (`diagnose`, `seed`, `simulate`, `simulate-start`, `web`, `labels-demo`), improved diagnostics output, and README quick-start coverage for each workflow.

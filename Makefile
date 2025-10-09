@@ -1,10 +1,13 @@
-.PHONY: seed diagnose simulate simulate-start web labels-demo migrate
+.PHONY: seed seed-staff diagnose simulate simulate-start web labels-demo migrate
 
 PYTHON ?= python3
 RUN := PYTHONPATH=. $(PYTHON)
 
 seed:
 	@$(RUN) scripts/seed_inventory.py
+
+seed-staff:
+	@$(RUN) scripts/seed_staff.py
 
 diagnose:
 	@$(RUN) scripts/diagnose_odoo.py
