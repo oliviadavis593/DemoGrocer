@@ -448,6 +448,82 @@ def test_markdown_labels_requires_body() -> None:
     assert error["detail"]["default_codes"]
 
 
+def test_flagged_endpoint_applies_filters(tmp_path: Path) -> None:
+    flagged_path = tmp_path / "flagged.json"
+    data = [
+        {
+            "default_code": "FF101",
+            "product": "Gala Apples",
+            "reason": "near_expiry",
+            "store": "Downtown",
+            "stores": ["Downtown"],
+            "category": "Produce",
+            "quantity": 4.5,
+            "outcome": "MARKDOWN",
+        },
+        {
+            "default_code": "FF202",
+            "product": "Whole Milk",
+            "reason": "low_movement",
+            "store": "Uptown",
+            "stores": ["Uptown"],
+            "category": "Dairy",
+            "quantity": 3.0,
+            "outcome": "DONATE",
+        },
+    ]
+    flagged_path.write_text(json.dumps(data), encoding="utf-8")
+
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        flagged_path_provider=lambda: flagged_path,
+    )
+    client = TestClient(app)
+
+    response = client.get("/flagged", params={"store": "Downtown"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["meta"]["total"] == 2
+    assert payload["meta"]["count"] == 1
+    assert payload["items"][0]["default_code"] == "FF101"
+    assert "Downtown" in payload["meta"]["filters"]["stores"]
+    assert "Produce" in payload["meta"]["filters"]["categories"]
+    assert payload["meta"]["active_filters"]["store"] == "Downtown"
+
+
+def test_dashboard_flagged_page_renders(tmp_path: Path) -> None:
+    flagged_path = tmp_path / "flagged.json"
+    flagged_path.write_text(
+        json.dumps(
+            [
+                {
+                    "default_code": "FF101",
+                    "product": "Gala Apples",
+                    "reason": "near_expiry",
+                    "store": "Downtown",
+                    "stores": ["Downtown"],
+                    "category": "Produce",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        flagged_path_provider=lambda: flagged_path,
+    )
+    client = TestClient(app)
+
+    response = client.get("/dashboard/flagged")
+    assert response.status_code == 200
+    content = response.text
+    assert "Flagged Decisions Dashboard" in content
+    assert "/flagged" in content
+
+
 def test_labels_index_handles_missing_directory(tmp_path: Path) -> None:
     app = create_app(
         repository_factory=lambda: None,

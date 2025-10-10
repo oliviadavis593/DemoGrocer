@@ -13,6 +13,7 @@ from typing import Iterable, List, Mapping, Protocol, Sequence, Tuple
 from services.simulator.inventory import InventorySnapshot, QuantRecord
 
 DEFAULT_EVENTS_PATH = Path(os.getenv("FOODFLOW_EVENTS_PATH", "out/events.jsonl"))
+DEFAULT_FLAGGED_PATH = Path(os.getenv("FOODFLOW_FLAGGED_PATH", "out/flagged.json"))
 
 
 @dataclass
@@ -199,10 +200,34 @@ def serialize_inventory_events(events: Sequence[InventoryEventProtocol]) -> List
     return payload
 
 
+def load_flagged_decisions(path: Path | None = None) -> List[dict[str, object]]:
+    """Load flagged decision payloads from disk."""
+
+    flagged_path = path or DEFAULT_FLAGGED_PATH
+    if not flagged_path.exists():
+        return []
+    try:
+        text = flagged_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise OSError(f"Failed to read flagged decisions from {flagged_path}") from exc
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Flagged decisions file {flagged_path} contains invalid JSON") from exc
+    if not isinstance(data, list):
+        raise ValueError("Flagged decisions file must contain a list of records")
+    records: List[dict[str, object]] = []
+    for entry in data:
+        if isinstance(entry, Mapping):
+            records.append(dict(entry))
+    return records
+
+
 __all__ = [
     "AtRiskItem",
     "EventRecord",
     "calculate_at_risk",
+    "load_flagged_decisions",
     "load_recent_events",
     "serialize_at_risk",
     "serialize_events",

@@ -85,6 +85,8 @@ The FastAPI service in `apps/web` exposes the following JSON endpoints:
 | `/events` | GET | Audits historical inventory movements stored in SQLite; supports filters to investigate specific event types or time windows. |
 | `/metrics/summary` | GET | Provides high-level counts that help track simulator throughput and spot unexpected spikes or gaps. |
 | `/at-risk` | GET | Surfaces lots that are approaching expiry so operators know which products need action inside Odoo. |
+| `/flagged` | GET | Returns the decision payload from `out/flagged.json`, supporting optional `store`, `category`, and `reason` query filters. |
+| `/dashboard/flagged` | GET | Serves an HTML dashboard that fetches `/flagged`, applies client-side filters, and triggers label generation via `/labels/markdown`. |
 | `/labels/markdown` | POST | Generates printable PDF labels for provided `default_codes`, useful for spot-checking or demo scenarios. |
 | `/out/labels/` | GET | Lists generated label PDFs so you can quickly download or inspect the latest artifacts under `out/labels`. |
 

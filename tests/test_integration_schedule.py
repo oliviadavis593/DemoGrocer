@@ -53,13 +53,23 @@ def test_detection_runner_updates_store_with_decisions(tmp_path) -> None:
         overstock_target_days=30.0,
     )
 
-    decision_payload = {"outcome": "MARKDOWN"}
+    decision_payload = {"outcome": "MARKDOWN", "reason": "near_expiry"}
     mapper = SimpleNamespace(
         map_flags=lambda flags: [SimpleNamespace(to_dict=lambda: decision_payload)]
     )
 
+    flag_payload = {
+        "reason": "near_expiry",
+        "product": "Gala Apples",
+        "default_code": "FF101",
+        "category": "Produce",
+        "locations": ["Downtown / Front"],
+        "quantity": 3.5,
+        "life_date": "2024-01-31",
+    }
+
     with patch("services.integration.schedule.load_config", return_value=IntegrationConfig()):
-        with patch("services.integration.schedule.detect_flags", return_value=[{"reason": "near_expiry"}]):
+        with patch("services.integration.schedule.detect_flags", return_value=[flag_payload]):
             with patch("services.integration.schedule.DecisionMapper.from_path", return_value=mapper):
                 runner = DetectionRunner(
                     store=store,
@@ -69,7 +79,17 @@ def test_detection_runner_updates_store_with_decisions(tmp_path) -> None:
                 )
                 runner.execute()
 
-    assert store.current() == [decision_payload]
+    payload = store.current()
+    assert len(payload) == 1
+    record = payload[0]
+    assert record["outcome"] == "MARKDOWN"
+    assert record["reason"] == "near_expiry"
+    assert record["default_code"] == "FF101"
+    assert record["product"] == "Gala Apples"
+    assert record["category"] == "Produce"
+    assert record["store"] == "Downtown"
+    assert record["stores"] == ["Downtown"]
+    assert record["quantity"] == 3.5
 
 
 def test_create_app_returns_flagged_payload(tmp_path) -> None:

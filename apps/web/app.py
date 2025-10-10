@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence, Tuple
 
 from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 try:  # pragma: no cover - optional dependency
     from pydantic import BaseModel
@@ -36,13 +36,7 @@ from services.recall import QuarantinedItem, RecallResult, RecallService
 from services.simulator.events import EventWriter
 from services.simulator.inventory import InventoryRepository
 
-from .data import (
-    calculate_at_risk,
-    load_recent_events,
-    serialize_at_risk,
-    serialize_events,
-    serialize_inventory_events,
-)
+from .data import calculate_at_risk, load_flagged_decisions, load_recent_events, serialize_at_risk, serialize_events, serialize_inventory_events
 
 EventsPathProvider = Callable[[], Path]
 RepositoryFactory = Callable[[], Optional[InventoryRepository]]
@@ -50,6 +44,7 @@ OdooClientProvider = Callable[[], Optional[OdooClient]]
 EventStoreProvider = Callable[[], EventStore]
 LabelsPathProvider = Callable[[], Path]
 RecallServiceFactory = Callable[[], Optional[RecallService]]
+FlaggedPathProvider = Callable[[], Path]
 
 _DURATION_RE = re.compile(r"^(?P<value>\d+)(?P<unit>[dhm])$")
 
@@ -68,6 +63,7 @@ def create_app(
     logger: logging.Logger | None = None,
     labels_path_provider: LabelsPathProvider | None = None,
     recall_service_factory: RecallServiceFactory | None = None,
+    flagged_path_provider: FlaggedPathProvider | None = None,
 ) -> FastAPI:
     """Construct the FastAPI application."""
 
@@ -78,6 +74,7 @@ def create_app(
     store_provider = event_store_provider or _default_event_store
     labels_provider = labels_path_provider or _default_labels_path
     recall_provider = recall_service_factory
+    flagged_provider = flagged_path_provider or _default_flagged_path
 
     def _build_recall_service() -> Optional[RecallService]:
         nonlocal recall_provider
@@ -116,6 +113,8 @@ def create_app(
                 "events": "/events",
                 "metrics_summary": "/metrics/summary",
                 "at_risk": "/at-risk",
+                "flagged": "/flagged",
+                "dashboard_flagged": "/dashboard/flagged",
                 "labels_markdown": "/labels/markdown",
                 "labels_index": "/out/labels/",
                 "recall_trigger": "/recall/trigger",
@@ -155,6 +154,369 @@ def create_app(
             return {"events": [], "meta": meta}
         meta["count"] = len(events)
         return {"events": events, "meta": meta}
+
+    @app.get("/flagged", response_class=JSONResponse)
+    def flagged(
+        store: str | None = Query(None),
+        category: str | None = Query(None),
+        reason: str | None = Query(None),
+    ) -> dict[str, object]:
+        flagged_path = flagged_provider()
+        exists = flagged_path.exists()
+        meta: dict[str, object] = {
+            "source": str(flagged_path),
+            "exists": exists,
+            "active_filters": {
+                "store": (store or "").strip(),
+                "category": (category or "").strip(),
+                "reason": (reason or "").strip(),
+            },
+        }
+        try:
+            records = load_flagged_decisions(flagged_path)
+        except ValueError:
+            meta["error"] = "invalid_flagged_json"
+            return {"items": [], "meta": meta}
+        except OSError:
+            meta["error"] = "flagged_read_failed"
+            return {"items": [], "meta": meta}
+
+        stores_set: set[str] = set()
+        categories_set: set[str] = set()
+        reasons_set: set[str] = set()
+        for record in records:
+            store_value = record.get("store")
+            if isinstance(store_value, str) and store_value.strip():
+                stores_set.add(store_value.strip())
+            store_list = record.get("stores")
+            if isinstance(store_list, Sequence):
+                for entry in store_list:
+                    if isinstance(entry, str) and entry.strip():
+                        stores_set.add(entry.strip())
+            category_value = record.get("category")
+            if isinstance(category_value, str) and category_value.strip():
+                categories_set.add(category_value.strip())
+            reason_value = record.get("reason")
+            if isinstance(reason_value, str) and reason_value.strip():
+                reasons_set.add(reason_value.strip())
+
+        store_filter = (store or "").strip()
+        category_filter = (category or "").strip()
+        reason_filter = (reason or "").strip()
+
+        def _matches(entry: dict[str, object]) -> bool:
+            if store_filter:
+                entry_store = entry.get("store")
+                entry_stores = entry.get("stores")
+                matches_primary = isinstance(entry_store, str) and entry_store == store_filter
+                matches_secondary = (
+                    isinstance(entry_stores, Sequence) and any((isinstance(item, str) and item == store_filter) for item in entry_stores)
+                )
+                if not (matches_primary or matches_secondary):
+                    return False
+            if category_filter:
+                category_value = entry.get("category")
+                if not (isinstance(category_value, str) and category_value == category_filter):
+                    return False
+            if reason_filter:
+                reason_value = entry.get("reason")
+                if not (isinstance(reason_value, str) and reason_value == reason_filter):
+                    return False
+            return True
+
+        filtered = [entry for entry in records if _matches(entry)]
+        filtered.sort(
+            key=lambda item: (
+                str(item.get("store") or ""),
+                str(item.get("reason") or ""),
+                str(item.get("default_code") or ""),
+            )
+        )
+
+        meta["total"] = len(records)
+        meta["count"] = len(filtered)
+        meta["filters"] = {
+            "stores": sorted(stores_set),
+            "categories": sorted(categories_set),
+            "reasons": sorted(reasons_set),
+        }
+        return {"items": filtered, "meta": meta}
+
+    @app.get("/dashboard/flagged", response_class=HTMLResponse)
+    def dashboard_flagged() -> HTMLResponse:
+        html = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Flagged Decisions Dashboard</title>
+  <style>
+    :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; padding: 1.5rem; background: #f7f7f7; color: #111; }
+    header { margin-bottom: 1rem; }
+    h1 { font-size: 1.6rem; margin: 0 0 0.25rem 0; }
+    p.subtitle { margin: 0; color: #555; }
+    .controls { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; align-items: flex-end; }
+    .controls label { display: flex; flex-direction: column; font-size: 0.9rem; gap: 0.25rem; min-width: 12rem; }
+    select, button { padding: 0.4rem 0.6rem; font-size: 0.95rem; }
+    button.primary { background: #2563eb; border: none; color: #fff; border-radius: 4px; cursor: pointer; }
+    button.secondary { background: #e5e7eb; border: none; color: #111; border-radius: 4px; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 6px; overflow: hidden; }
+    th, td { padding: 0.65rem; text-align: left; border-bottom: 1px solid #e5e7eb; vertical-align: top; font-size: 0.9rem; }
+    th { background: #f3f4f6; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; }
+    tbody tr:hover { background: #f5faff; }
+    .pill { display: inline-flex; align-items: center; padding: 0.15rem 0.4rem; border-radius: 999px; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; }
+    #status { margin-top: 1rem; min-height: 1.5rem; font-size: 0.95rem; }
+    #status.error { color: #b91c1c; }
+    #status.success { color: #0f766e; }
+    #status.info { color: #2563eb; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #0f172a; color: #e2e8f0; }
+      table { background: #1e293b; }
+      th { background: #0f172a; }
+      tbody tr:hover { background: #1e293b; }
+      select, button.primary, button.secondary { color: inherit; }
+      button.secondary { background: #334155; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Flagged Decisions Dashboard</h1>
+    <p class="subtitle">Review flagged inventory, filter by store, category, or reason, and print labels in bulk.</p>
+  </header>
+  <section class="controls">
+    <label>Store
+      <select id="filter-store">
+        <option value="">All stores</option>
+      </select>
+    </label>
+    <label>Category
+      <select id="filter-category">
+        <option value="">All categories</option>
+      </select>
+    </label>
+    <label>Reason
+      <select id="filter-reason">
+        <option value="">All reasons</option>
+      </select>
+    </label>
+    <div class="actions">
+      <button class="secondary" id="refresh-btn" type="button">Refresh</button>
+      <button class="primary" id="print-btn" type="button">Print Labels</button>
+    </div>
+  </section>
+  <section>
+    <table aria-describedby="status">
+      <thead>
+        <tr>
+          <th scope="col"></th>
+          <th scope="col">Code</th>
+          <th scope="col">Product</th>
+          <th scope="col">Reason</th>
+          <th scope="col">Store(s)</th>
+          <th scope="col">Category</th>
+          <th scope="col">Qty</th>
+          <th scope="col">Outcome</th>
+          <th scope="col">Notes</th>
+        </tr>
+      </thead>
+      <tbody id="flagged-tbody">
+        <tr><td colspan="9">Loading flagged items…</td></tr>
+      </tbody>
+    </table>
+  </section>
+  <div id="status" role="status" aria-live="polite"></div>
+  <script>
+    const state = {
+      filters: { store: "", category: "", reason: "" },
+      data: [],
+      meta: {}
+    };
+
+    async function loadFlagged() {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(state.filters)) {
+        if (value) params.append(key, value);
+      }
+      setStatus("Loading flagged decisions…", "info");
+      try {
+        const response = await fetch("/flagged" + (params.toString() ? `?${params}` : ""));
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`);
+        }
+        const payload = await response.json();
+        state.data = Array.isArray(payload.items) ? payload.items : [];
+        state.meta = payload.meta || {};
+        populateFilters(state.meta.filters || {});
+        renderTable();
+        const count = state.meta.count ?? state.data.length;
+        setStatus(`Showing ${count} flagged item${count === 1 ? "" : "s"}.`, "success");
+      } catch (error) {
+        console.error(error);
+        setStatus("Failed to load flagged decisions. See console for details.", "error");
+      }
+    }
+
+    function populateFilters(filters) {
+      populateSelect(document.getElementById("filter-store"), filters.stores || []);
+      populateSelect(document.getElementById("filter-category"), filters.categories || []);
+      populateSelect(document.getElementById("filter-reason"), filters.reasons || []);
+    }
+
+    function populateSelect(element, values) {
+      if (!element) return;
+      const current = element.value;
+      element.innerHTML = "";
+      const defaultOption = document.createElement("option");
+      defaultOption.value = "";
+      defaultOption.textContent = element.id === "filter-store" ? "All stores" :
+        element.id === "filter-category" ? "All categories" : "All reasons";
+      element.appendChild(defaultOption);
+      for (const value of values) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        element.appendChild(option);
+      }
+      element.value = current;
+    }
+
+    function renderTable() {
+      const tbody = document.getElementById("flagged-tbody");
+      if (!tbody) return;
+      tbody.innerHTML = "";
+      if (!state.data.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 9;
+        cell.textContent = "No flagged decisions match the selected filters.";
+        row.appendChild(cell);
+        tbody.appendChild(row);
+        return;
+      }
+
+      for (const entry of state.data) {
+        const row = document.createElement("tr");
+        const checkboxCell = document.createElement("td");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.value = entry.default_code || "";
+        checkbox.dataset.code = entry.default_code || "";
+        if (!entry.default_code) {
+          checkbox.disabled = true;
+          checkbox.title = "No default code available for label printing.";
+        }
+        checkboxCell.appendChild(checkbox);
+        row.appendChild(checkboxCell);
+
+        row.appendChild(createCell(entry.default_code || "—"));
+        row.appendChild(createCell(entry.product || "—"));
+
+        const reasonCell = document.createElement("td");
+        const reasonPill = document.createElement("span");
+        reasonPill.className = "pill";
+        reasonPill.textContent = entry.reason || "—";
+        reasonCell.appendChild(reasonPill);
+        row.appendChild(reasonCell);
+
+        const stores = Array.isArray(entry.stores) ? entry.stores.join(", ") : (entry.store || "—");
+        row.appendChild(createCell(stores || "—"));
+        row.appendChild(createCell(entry.category || "—"));
+
+        const qtyCell = document.createElement("td");
+        if (entry.quantity !== undefined && entry.quantity !== null && !Number.isNaN(Number(entry.quantity))) {
+          qtyCell.textContent = Number(entry.quantity).toFixed(2);
+        } else {
+          qtyCell.textContent = "—";
+        }
+        row.appendChild(qtyCell);
+
+        row.appendChild(createCell(entry.outcome || "—"));
+        row.appendChild(createCell(entry.notes || "—"));
+
+        tbody.appendChild(row);
+      }
+    }
+
+    function createCell(value) {
+      const cell = document.createElement("td");
+      cell.textContent = typeof value === "string" ? value : value ?? "—";
+      return cell;
+    }
+
+    function setStatus(message, tone) {
+      const status = document.getElementById("status");
+      if (!status) return;
+      status.className = tone || "";
+      status.textContent = message;
+    }
+
+    function gatherSelectedCodes() {
+      const checkboxes = document.querySelectorAll("#flagged-tbody input[type='checkbox']:checked");
+      const codes = [];
+      for (const checkbox of checkboxes) {
+        const code = checkbox.dataset.code || "";
+        if (code && !codes.includes(code)) {
+          codes.push(code);
+        }
+      }
+      return codes;
+    }
+
+    async function printLabels() {
+      const codes = gatherSelectedCodes();
+      if (!codes.length) {
+        setStatus("Select at least one item with a default code to print labels.", "info");
+        return;
+      }
+      setStatus(`Generating labels for ${codes.length} item${codes.length === 1 ? "" : "s"}…`, "info");
+      try {
+        const response = await fetch("/labels/markdown", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ default_codes: codes })
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          const detail = payload && payload.detail;
+          const message = typeof detail === "string" ? detail : (detail && detail.default_codes) || "Label generation failed.";
+          throw new Error(message);
+        }
+        const count = payload.meta && typeof payload.meta.count === "number" ? payload.meta.count : codes.length;
+        const generated = payload.links ? Object.keys(payload.links).join(", ") : "";
+        const message = generated
+          ? `Generated ${count} PDF label${count === 1 ? "" : "s"} for ${generated}.`
+          : `Generated ${count} PDF label${count === 1 ? "" : "s"}.`;
+        setStatus(message, "success");
+      } catch (error) {
+        console.error(error);
+        setStatus(error instanceof Error ? error.message : "Label generation failed.", "error");
+      }
+    }
+
+    document.getElementById("filter-store")?.addEventListener("change", (event) => {
+      state.filters.store = (event.target.value || "").trim();
+      loadFlagged();
+    });
+    document.getElementById("filter-category")?.addEventListener("change", (event) => {
+      state.filters.category = (event.target.value || "").trim();
+      loadFlagged();
+    });
+    document.getElementById("filter-reason")?.addEventListener("change", (event) => {
+      state.filters.reason = (event.target.value || "").trim();
+      loadFlagged();
+    });
+    document.getElementById("refresh-btn")?.addEventListener("click", loadFlagged);
+    document.getElementById("print-btn")?.addEventListener("click", printLabels);
+
+    loadFlagged();
+  </script>
+</body>
+</html>
+        """.strip()
+        return HTMLResponse(content=html)
 
     @app.get("/events", response_class=JSONResponse)
     def events(
@@ -497,6 +859,12 @@ def _default_repository_factory() -> InventoryRepository | None:
 
 def _default_labels_path() -> Path:
     return Path("out/labels")
+
+
+def _default_flagged_path() -> Path:
+    from .data import DEFAULT_FLAGGED_PATH
+
+    return DEFAULT_FLAGGED_PATH
 
 
 def _labels_directory_listing(directory: Path) -> dict[str, object]:

@@ -259,30 +259,85 @@ def _load_yaml(text: str) -> object:
 
 
 def _parse_simple_yaml(text: str) -> Dict[str, object]:
-    root: Dict[str, object] = {}
-    stack: List[tuple[int, Dict[str, object]]] = [(-1, root)]
+    """Very small YAML subset parser used when PyYAML is unavailable.
+
+    Supports nested mappings and lists of mappings/scalars using indentation.
+    This covers the repository policies without pulling in extra dependencies.
+    """
+
+    lines: List[tuple[int, str]] = []
     for raw_line in text.splitlines():
-        if not raw_line.strip() or raw_line.lstrip().startswith("#"):
+        stripped = raw_line.strip()
+        if not stripped or raw_line.lstrip().startswith("#"):
             continue
         indent = len(raw_line) - len(raw_line.lstrip(" "))
-        line = raw_line.strip()
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        key = key.strip()
-        value = value.strip()
+        lines.append((indent, stripped))
 
-        while stack and indent <= stack[-1][0]:
-            stack.pop()
-        parent = stack[-1][1] if stack else root
+    index = 0
 
-        if not value:
-            new_map: Dict[str, object] = {}
-            parent[key] = new_map
-            stack.append((indent, new_map))
-        else:
-            parent[key] = _parse_scalar(value)
-    return root
+    def parse_block(expected_indent: int) -> object:
+        nonlocal index
+        mapping: Dict[str, object] = {}
+        sequence: List[object] = []
+        mode: Optional[str] = None  # "dict" or "list"
+
+        while index < len(lines):
+            indent, content = lines[index]
+            if indent < expected_indent:
+                break
+
+            if content.startswith("- "):
+                if mode == "dict":
+                    break
+                mode = "list"
+                index += 1
+                item_content = content[2:].strip()
+                item_value: object
+
+                if not item_content:
+                    item_value = parse_block(indent + 2)
+                elif ":" in item_content:
+                    key, value_part = item_content.split(":", 1)
+                    key = key.strip()
+                    value_part = value_part.strip()
+                    item_map: Dict[str, object] = {}
+                    if value_part:
+                        item_map[key] = _parse_scalar(value_part)
+                    else:
+                        item_map[key] = parse_block(indent + 2)
+                    extra = parse_block(indent + 2)
+                    if isinstance(extra, dict):
+                        item_map.update(extra)
+                    item_value = item_map
+                else:
+                    item_value = _parse_scalar(item_content)
+                    extra = parse_block(indent + 2)
+                    if isinstance(extra, dict) and extra:
+                        if isinstance(item_value, dict):
+                            item_value.update(extra)
+                        else:
+                            item_value = extra
+                sequence.append(item_value)
+            else:
+                if mode == "list":
+                    break
+                mode = "dict"
+                index += 1
+                key, value_part = content.split(":", 1)
+                key = key.strip()
+                value_part = value_part.strip()
+                if value_part:
+                    value = _parse_scalar(value_part)
+                else:
+                    value = parse_block(indent + 2)
+                mapping[key] = value
+
+        if mode == "list":
+            return sequence
+        return mapping
+
+    result = parse_block(0)
+    return result if isinstance(result, dict) else {}
 
 
 def _parse_scalar(value: str) -> object:

@@ -137,6 +137,7 @@ Each command maps to a common developer workflow:
 - `PYTHONPATH=. python3 services/integration/schedule.py start --interval 10` launches the background scheduler and lightweight HTTP server that refreshes `out/flagged.json` every N minutes and serves `/flagged` alongside `/health` on port 8000.
 - `make labels-demo` renders sample product labels to PDF under `out/labels`.
 - `make web` starts the FastAPI reporting server so `/health` returns 200 once the app is ready.
+- Visit `http://localhost:8000/dashboard/flagged` after `make web` to review flagged decisions with store/category/reason filters and kick off bulk label generation via `/labels/markdown`.
 
 `make simulate` and `make simulate-start` automatically migrate the local SQLite
 database so events are stored in `out/foodflow.db`. After a run you can spot-check the new activity with:
@@ -147,6 +148,7 @@ tail -n 50 out/events.jsonl | grep -E '"type":"(returns|shrink|flag_low_movement
 curl -s "http://localhost:8000/events?type=flag_low_movement&since=7d" | head
 curl -s "http://localhost:8000/events?type=flag_overstock&since=7d" | head
 curl -s "http://localhost:8000/flagged" | jq
+curl -s "http://localhost:8000/flagged?store=Downtown&reason=near_expiry" | jq
 ```
 
 Shrink trigger thresholds live in `config/shrink_triggers.yaml`. Tweak the sales window, minimum units sold, or per-category days-of-supply limits and re-run `make simulate` to observe how many `flag_low_movement` and `flag_overstock` events the detector emits.
@@ -202,7 +204,7 @@ Example requests:
 
 ```bash
 curl -s http://localhost:8000/
-# {"app":"FoodFlow reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","at_risk":"/at-risk","labels_markdown":"/labels/markdown","labels_index":"/out/labels/"},"docs":"See README.md for curl examples and Make targets."}
+# {"app":"FoodFlow reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","at_risk":"/at-risk","flagged":"/flagged","dashboard_flagged":"/dashboard/flagged","labels_markdown":"/labels/markdown","labels_index":"/out/labels/"},"docs":"See README.md for curl examples and Make targets."}
 
 curl -s http://localhost:8000/health
 # {"status":"ok"}

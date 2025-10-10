@@ -12,7 +12,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Iterable, List, Sequence
+from typing import Iterable, List, Mapping, Sequence
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -155,7 +155,7 @@ class DetectionRunner:
             LOGGER.exception("Failed to map flags to decisions using %s", self._policy_path)
             return
 
-        payload = [decision.to_dict() for decision in decisions]
+        payload = _merge_decisions_with_flags(decisions, flags)
         self._store.update(payload)
 
 
@@ -217,6 +217,107 @@ def create_app(store: FlaggedStore) -> FastAPI:
             return []
 
     return app
+
+
+def _normalize_store_name(raw: object) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    store = raw.strip()
+    if not store:
+        return None
+    if "/" in store:
+        store = store.split("/", 1)[0].strip()
+    return store or None
+
+
+def _extract_metadata(flag: Mapping[str, object]) -> dict[str, object]:
+    record: dict[str, object] = {}
+
+    default_code = flag.get("default_code")
+    if isinstance(default_code, str) and default_code.strip():
+        record["default_code"] = default_code.strip()
+
+    product = flag.get("product")
+    if isinstance(product, str) and product.strip():
+        record["product"] = product.strip()
+
+    category = flag.get("category")
+    if isinstance(category, str) and category.strip():
+        record["category"] = category.strip()
+
+    life_date = flag.get("life_date")
+    if isinstance(life_date, str) and life_date.strip():
+        record["life_date"] = life_date.strip()
+
+    quantity = flag.get("quantity")
+    try:
+        if quantity is not None:
+            record["quantity"] = round(float(quantity), 4)
+    except (TypeError, ValueError):
+        pass
+
+    lots = flag.get("lots")
+    if isinstance(lots, Sequence):
+        lot_values: list[str] = []
+        seen: set[str] = set()
+        for entry in lots:
+            if not isinstance(entry, str):
+                continue
+            value = entry.strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            lot_values.append(value)
+        if lot_values:
+            record["lots"] = lot_values
+
+    locations = flag.get("locations")
+    stores: list[str] = []
+    if isinstance(locations, Sequence):
+        seen_locations: set[str] = set()
+        for entry in locations:
+            store = _normalize_store_name(entry)
+            if not store or store in seen_locations:
+                continue
+            seen_locations.add(store)
+            stores.append(store)
+    store_value = flag.get("store")
+    store_name = _normalize_store_name(store_value)
+    if store_name and store_name not in stores:
+        stores.append(store_name)
+    if stores:
+        record["stores"] = stores
+        record["store"] = stores[0] if len(stores) == 1 else "Multiple"
+    else:
+        record["stores"] = []
+        record["store"] = "Unassigned"
+
+    return record
+
+
+def _merge_decisions_with_flags(
+    decisions: Sequence[object],
+    flags: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    payload: list[dict[str, object]] = []
+    total_flags = len(flags)
+    for index, decision in enumerate(decisions):
+        base = {}
+        if hasattr(decision, "to_dict"):
+            try:
+                base = dict(decision.to_dict())
+            except Exception:
+                base = {}
+        flag = flags[index] if index < total_flags else {}
+        metadata = _extract_metadata(flag if isinstance(flag, Mapping) else {})
+        merged = dict(metadata)
+        merged.update(base)
+        if "store" not in merged:
+            merged["store"] = "Unassigned"
+        if "stores" not in merged:
+            merged["stores"] = []
+        payload.append(merged)
+    return payload
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
