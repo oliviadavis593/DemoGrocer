@@ -34,6 +34,7 @@ except ModuleNotFoundError:  # pragma: no cover - lightweight fallback
 from packages.db import EventStore
 from packages.odoo_client import OdooClient, OdooClientError
 from services.docs import MarkdownLabelGenerator
+from services.integration.enricher import enrich_decisions
 from services.integration.odoo_service import OdooService
 from services.recall import QuarantinedItem, RecallResult, RecallService
 from services.simulator.events import EventWriter
@@ -222,6 +223,16 @@ def create_app(
         except OSError:
             meta["error"] = "flagged_read_failed"
             return {"items": [], "meta": meta}
+
+        try:
+            client = odoo_provider()
+        except Exception:
+            app_logger.exception("Failed to initialize Odoo client for enrichment")
+            client = None
+        try:
+            records = enrich_decisions(records, client=client, allow_remote=client is not None)
+        except Exception:
+            app_logger.exception("Failed to enrich flagged decisions for /flagged endpoint")
 
         stores_set: set[str] = set()
         categories_set: set[str] = set()
@@ -625,7 +636,8 @@ def create_app(
         row.appendChild(checkboxCell);
 
         row.appendChild(createCell(entry.default_code || "—"));
-        row.appendChild(createCell(entry.product || "—"));
+        const productName = entry.product_name || entry.product || "—";
+        row.appendChild(createCell(productName));
 
         const reasonCell = document.createElement("td");
         const reasonPill = document.createElement("span");
@@ -639,8 +651,9 @@ def create_app(
         row.appendChild(createCell(entry.category || "—"));
 
         const qtyCell = document.createElement("td");
-        if (entry.quantity !== undefined && entry.quantity !== null && !Number.isNaN(Number(entry.quantity))) {
-          qtyCell.textContent = Number(entry.quantity).toFixed(2);
+        const qtyValue = entry.qty ?? entry.quantity;
+        if (qtyValue !== undefined && qtyValue !== null && !Number.isNaN(Number(qtyValue))) {
+          qtyCell.textContent = Number(qtyValue).toFixed(2);
         } else {
           qtyCell.textContent = "—";
         }
@@ -1012,12 +1025,12 @@ def _serialize_flagged_csv_rows(items: Sequence[Mapping[str, object]]) -> list[d
             continue
         row = {
             "default_code": _stringify(entry.get("default_code")),
-            "product": _stringify(entry.get("product")),
+            "product": _stringify(entry.get("product_name") or entry.get("product")),
             "lot": _stringify(entry.get("lot")),
             "reason": _stringify(entry.get("reason")),
             "outcome": _stringify(entry.get("outcome")),
             "suggested_qty": _stringify(entry.get("suggested_qty")),
-            "quantity": _stringify(entry.get("quantity")),
+            "quantity": _stringify(entry.get("qty") or entry.get("quantity")),
             "unit": _stringify(entry.get("unit") or entry.get("unit_of_measure") or entry.get("uom")),
             "price_markdown_pct": _stringify(entry.get("price_markdown_pct")),
             "store": _stringify(entry.get("store")),

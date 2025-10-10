@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Mapping, MutableMapping, Optional
+from typing import Dict, Mapping, MutableMapping, Optional, Sequence
 
 try:  # pragma: no cover - optional dependency
     import yaml  # type: ignore
@@ -20,6 +20,7 @@ class IntegrationInventoryConfig:
 
     summary_limit: int = 5
     lot_expiry_field: Optional[str] = None
+    quarantine_locations: tuple[str, ...] = ()
 
     @classmethod
     def from_mapping(cls, data: Optional[Mapping[str, object]]) -> "IntegrationInventoryConfig":
@@ -37,7 +38,12 @@ class IntegrationInventoryConfig:
             lot_expiry_field = None
         else:
             lot_expiry_field = str(raw_field)
-        return cls(summary_limit=summary_limit, lot_expiry_field=lot_expiry_field)
+        quarantine_locations = tuple(_parse_quarantine_locations(data.get("quarantine_locations")))
+        return cls(
+            summary_limit=summary_limit,
+            lot_expiry_field=lot_expiry_field,
+            quarantine_locations=quarantine_locations,
+        )
 
 
 @dataclass
@@ -124,6 +130,24 @@ def _parse_scalar(value: str) -> object:
     ):
         return value[1:-1]
     return value
+
+
+def _parse_quarantine_locations(value: object) -> Sequence[str]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        entries = [token.strip() for token in value.split(",")]
+        return tuple(entry for entry in entries if entry)
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        entries: list[str] = []
+        for entry in value:
+            if entry is None:
+                continue
+            text = str(entry).strip()
+            if text:
+                entries.append(text)
+        return tuple(entries)
+    return ()
 
 
 __all__ = ["DEFAULT_CONFIG_PATH", "IntegrationConfig", "IntegrationInventoryConfig", "load_config"]

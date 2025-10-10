@@ -500,6 +500,8 @@ def test_flagged_endpoint_applies_filters(tmp_path: Path) -> None:
     assert "Downtown" in payload["meta"]["filters"]["stores"]
     assert "Produce" in payload["meta"]["filters"]["categories"]
     assert payload["meta"]["active_filters"]["store"] == "Downtown"
+    assert payload["items"][0]["product_name"] == "Gala Apples"
+    assert payload["items"][0]["qty"] == 4.5
 
 
 def test_export_flagged_csv_includes_headers(tmp_path: Path) -> None:

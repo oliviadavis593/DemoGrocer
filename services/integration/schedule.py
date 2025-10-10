@@ -24,6 +24,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
 
 from packages.decision.policy import DEFAULT_POLICY_PATH, DecisionMapper
 from services.integration.config import DEFAULT_CONFIG_PATH, IntegrationConfig, load_config
+from services.integration.enricher import enrich_decisions
 from services.integration.odoo_service import OdooService
 from services.integration.shrink_detector import detect_flags
 
@@ -211,10 +212,15 @@ def create_app(store: FlaggedStore) -> FastAPI:
     @app.get("/flagged", response_class=JSONResponse)
     def flagged() -> List[dict[str, object]]:
         try:
-            return store.current()
+            current = store.current()
         except Exception:
             LOGGER.exception("Failed to read flagged decisions")
             return []
+        try:
+            return enrich_decisions(current)
+        except Exception:
+            LOGGER.exception("Failed to enrich flagged decisions")
+            return current
 
     return app
 

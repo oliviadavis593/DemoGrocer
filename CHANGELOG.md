@@ -2,6 +2,8 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+
+## [0.3.0] - 2025-10-10
 ### Added
 - `/flagged` JSON endpoint and `/dashboard/flagged` dashboard for reviewing flagged decisions with filter controls and one-click label generation.
 - `/metrics/impact` API plus dashboard overview cards summarising waste diverted (USD) and donated weight derived from decision outcomes, including documentation and tests.
@@ -9,7 +11,7 @@ All notable changes to this project will be documented in this file.
 - CSV exports for flagged decisions and inventory events (`/export/flagged.csv`, `/export/events.csv`) including optional API key protection, documentation updates, and automated tests validating headers.
 
 ### Changed
-- Flagged decision payloads now include normalized store lists plus category metadata so downstream tooling and the dashboard can filter effectively.
+- `/flagged` responses (scheduler API, reporting API, and CSV export) now enrich each decision with live `product_name`, `category`, store names, and on-hand `qty` sourced from Odoo stock while excluding configurable quarantine locations for faster dashboard reviews.
 
 
 ## [0.2.1] - 2025-10-09

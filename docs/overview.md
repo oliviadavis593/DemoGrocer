@@ -13,7 +13,7 @@ FoodFlow bundles the tooling needed to demonstrate a realistic grocery retail op
 - **services/simulator** – Orchestrates sell-down, returns, shrink, expiry, and receiving jobs. Events flow to `out/events.jsonl` and optionally to SQLite via `packages/db`.
 - **services/analysis/shrink_triggers.py** – Evaluates recent sales history against configurable thresholds to emit `flag_low_movement` and `flag_overstock` analysis events during simulator ticks.
 - **services/recall** – Provides helpers to quarantine products, ensuring `recall_quarantine` events and the `Quarantine` location stay in sync for both CLI and API triggers.
-- **services/integration** – Houses the integration runner CLI plus a reusable `OdooService` wrapper that authenticates once and shares inventory access across the API, jobs, and automation hooks.
+- **services/integration** – Houses the integration runner CLI plus a reusable `OdooService` wrapper that authenticates once and shares inventory access across the API, jobs, and automation hooks, including enrichment helpers that map decision payloads to live product/category/store data while respecting `inventory.quarantine_locations` from `services/integration/config.yaml`.
 - **packages/db** – Local SQLite helpers and schema migration tooling that store simulator events for historical reporting.
 - **apps/web** – FastAPI application that surfaces diagnostics, recent events, inventory metrics, PDF label generation, and directory listings for rendered labels.
 - **services/docs/labels.py** – Markdown-to-PDF label generator used both by the API and by the `make labels-demo` helper script.

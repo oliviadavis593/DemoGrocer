@@ -103,7 +103,15 @@ def test_create_app_returns_flagged_payload(tmp_path) -> None:
     response = client.get("/flagged")
 
     assert response.status_code == 200
-    assert response.json() == payload
+    enriched = response.json()
+    assert len(enriched) == 1
+    entry = enriched[0]
+    assert entry["reason"] == "low_movement"
+    assert entry["product_name"] == "—"
+    assert entry["category"] == "—"
+    assert entry["stores"] == []
+    assert entry["store"] == "Unassigned"
+    assert entry["qty"] == 0.0
 
 
 def test_create_app_never_raises_from_store_errors() -> None:

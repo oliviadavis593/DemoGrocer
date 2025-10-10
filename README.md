@@ -151,6 +151,8 @@ curl -s "http://localhost:8000/flagged" | jq
 curl -s "http://localhost:8000/flagged?store=Downtown&reason=near_expiry" | jq
 ```
 
+Each `/flagged` response (and the dashboard that consumes it) now includes `product_name`, `category`, an ordered `stores` list, and an on-hand `qty` sourced directly from Odoo stock quants. Quarantine locations are filtered out automatically; add any additional names to the `inventory.quarantine_locations` array in `services/integration/config.yaml` if your instance uses custom isolation areas.
+
 Shrink trigger thresholds live in `config/shrink_triggers.yaml`. Tweak the sales window, minimum units sold, or per-category days-of-supply limits and re-run `make simulate` to observe how many `flag_low_movement` and `flag_overstock` events the detector emits.
 
 Decision outcomes, markdown percentages, and donation rules live in `config/decision_policy.yaml`. Adjust the YAML to tune outcomes (e.g. increase markdown percentages for overstock) and re-run `PYTHONPATH=. python3 services/integration/runner.py decisions` to review the updated recommendations.
