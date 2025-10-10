@@ -204,7 +204,7 @@ Example requests:
 
 ```bash
 curl -s http://localhost:8000/
-# {"app":"FoodFlow reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","metrics_impact":"/metrics/impact","at_risk":"/at-risk","flagged":"/flagged","dashboard_flagged":"/dashboard/flagged","labels_markdown":"/labels/markdown","labels_index":"/out/labels/"},"docs":"See README.md for curl examples and Make targets."}
+# {"app":"FoodFlow reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","metrics_last_sync":"/metrics/last_sync","metrics_impact":"/metrics/impact","at_risk":"/at-risk","flagged":"/flagged","dashboard_flagged":"/dashboard/flagged","labels_markdown":"/labels/markdown","labels_index":"/out/labels/"},"docs":"See README.md for curl examples and Make targets."}
 
 curl -s http://localhost:8000/health
 # {"status":"ok"}
@@ -217,6 +217,9 @@ curl -s "http://localhost:8000/events?limit=5"
 
 curl -s "http://localhost:8000/metrics/summary"
 # {"events":{"total_events":120,"events_by_type":{"receiving":40,"sell_down":60,"daily_expiry":20}}, "meta":{"source":"database"}}
+
+curl -s "http://localhost:8000/metrics/last_sync"
+# {"last_sync":"2024-01-12T15:45:00+00:00","meta":{"source":"database"}}
 
 curl -s "http://localhost:8000/metrics/impact"
 # {"impact":{"diverted_value_usd":418.75,"donated_weight_lbs":132.5,"markdown_count":24,"donation_count":6},"meta":{"source":"out/flagged.json","exists":true,"count":30}}
@@ -243,6 +246,8 @@ curl -s -X POST "http://localhost:8000/recall/trigger" \
 curl -s "http://localhost:8000/recall/quarantined"
 # {"items":[{"product":"Whole Milk","default_code":"FF102","lot":"LOT-FF102","quantity":8.0}], "meta":{"count":1}}
 ```
+
+The `/dashboard/flagged` view consumes `/metrics/last_sync` and surfaces a red banner if the most recent integration sync is more than 30 minutes old, helping surface stale inventory data during reviews.
 
 If `out/events.jsonl` is missing or contains invalid JSON, the API returns
 `{"events": [], "meta": {"exists": false, "error": "..."} }` with a 200

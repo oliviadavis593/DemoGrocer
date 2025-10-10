@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 - `/flagged` JSON endpoint and `/dashboard/flagged` dashboard for reviewing flagged decisions with filter controls and one-click label generation.
 - `/metrics/impact` API plus dashboard overview cards summarising waste diverted (USD) and donated weight derived from decision outcomes, including documentation and tests.
+- Persistent tracking of the last integration sync with a `/metrics/last_sync` endpoint and dashboard banner that highlights when data is more than 30 minutes old.
 
 ### Changed
 - Flagged decision payloads now include normalized store lists plus category metadata so downstream tooling and the dashboard can filter effectively.

@@ -681,3 +681,45 @@ def test_metrics_summary_reports_counts(tmp_path: Path) -> None:
     assert payload["events"]["by_type"]["receiving"] == 1
     assert payload["events"]["by_type"]["sell_down"] == 1
     assert payload["meta"]["source"] == "database"
+
+
+def test_metrics_last_sync_reports_timestamp(tmp_path: Path) -> None:
+    db_path = tmp_path / "events.db"
+    run_migration(db_path)
+    store = EventStore(db_path)
+    recorded = datetime(2024, 1, 12, 15, 45, tzinfo=timezone.utc)
+    store.record_integration_sync(recorded)
+
+    app = create_app(
+        events_path_provider=lambda: tmp_path / "unused.jsonl",
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        event_store_provider=lambda: EventStore(db_path),
+    )
+    client = TestClient(app)
+
+    resp = client.get("/metrics/last_sync")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["last_sync"] == recorded.isoformat()
+    assert payload["meta"]["source"] == "database"
+
+
+def test_metrics_last_sync_handles_missing_record(tmp_path: Path) -> None:
+    db_path = tmp_path / "events.db"
+    run_migration(db_path)
+
+    app = create_app(
+        events_path_provider=lambda: tmp_path / "unused.jsonl",
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        event_store_provider=lambda: EventStore(db_path),
+    )
+    client = TestClient(app)
+
+    resp = client.get("/metrics/last_sync")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["last_sync"] is None
+    assert payload["meta"]["source"] == "database"
+    assert payload["meta"]["status"] == "not_recorded"

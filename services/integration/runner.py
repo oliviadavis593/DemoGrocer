@@ -7,6 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
+from packages.db import EventStore
 from packages.odoo_client import OdooClientError
 from packages.decision.policy import DEFAULT_POLICY_PATH as DEFAULT_DECISION_POLICY_PATH, DecisionMapper
 
@@ -60,6 +61,10 @@ def cmd_sync(args: argparse.Namespace) -> int:
         return 1
 
     logger.info("Integration sync processed %d quants", result.total_quants)
+    try:
+        EventStore().record_integration_sync(result.timestamp)
+    except Exception:
+        logger.exception("Failed to record integration sync timestamp")
     return 0
 
 

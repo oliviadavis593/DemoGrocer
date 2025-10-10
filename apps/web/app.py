@@ -120,6 +120,7 @@ def create_app(
                 "events_recent": "/events/recent",
                 "events": "/events",
                 "metrics_summary": "/metrics/summary",
+                "metrics_last_sync": "/metrics/last_sync",
                 "metrics_impact": "/metrics/impact",
                 "at_risk": "/at-risk",
                 "flagged": "/flagged",
@@ -298,6 +299,9 @@ def create_app(
     header { margin-bottom: 1.5rem; }
     h1 { font-size: 1.6rem; margin: 0 0 0.25rem 0; }
     p.subtitle { margin: 0; color: #555; }
+    .sync-banner { display: none; margin-top: 0.75rem; padding: 0.75rem 1rem; border-radius: 6px; border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; font-size: 0.95rem; }
+    .sync-banner.visible { display: block; }
+    .sync-banner.info { border-color: #bfdbfe; background: #eff6ff; color: #1d4ed8; }
     .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
     .card { background: #fff; border-radius: 8px; padding: 1rem; box-shadow: 0 16px 24px rgba(15, 23, 42, 0.08); }
     .card h2 { margin: 0; font-size: 1rem; letter-spacing: 0.02em; text-transform: uppercase; color: #475569; }
@@ -329,6 +333,8 @@ def create_app(
       .card h2 { color: #cbd5f5; }
       .metric { color: #f8fafc; }
       .metric-caption { color: #94a3b8; }
+      .sync-banner { background: rgba(127, 29, 29, 0.35); color: #fecaca; border-color: rgba(185, 28, 28, 0.7); }
+      .sync-banner.info { background: rgba(30, 64, 175, 0.35); color: #dbeafe; border-color: rgba(59, 130, 246, 0.6); }
     }
   </style>
 </head>
@@ -336,6 +342,7 @@ def create_app(
   <header>
     <h1>Flagged Decisions Dashboard</h1>
     <p class="subtitle">Review flagged inventory, monitor impact, filter by store, category, or reason, and print labels in bulk.</p>
+    <div id="sync-banner" class="sync-banner" role="status" aria-live="polite"></div>
   </header>
   <section class="overview" aria-label="Impact overview">
     <article class="card">
@@ -396,8 +403,71 @@ def create_app(
       filters: { store: "", category: "", reason: "" },
       data: [],
       meta: {},
-      impact: { diverted_value_usd: 0, donated_weight_lbs: 0 }
+      impact: { diverted_value_usd: 0, donated_weight_lbs: 0 },
+      lastSyncIso: null,
+      lastSyncMeta: {},
+      lastSyncError: false
     };
+
+    const SYNC_STALE_MINUTES = 30;
+
+    function renderSyncBanner() {
+      const banner = document.getElementById("sync-banner");
+      if (!banner) return;
+      banner.className = "sync-banner";
+
+      if (state.lastSyncError) {
+        banner.textContent = "Unable to load the latest integration sync time.";
+        banner.classList.add("visible");
+        return;
+      }
+
+      const iso = typeof state.lastSyncIso === "string" ? state.lastSyncIso : null;
+      const metaStatus = state.lastSyncMeta ? state.lastSyncMeta.status : null;
+
+      if (!iso) {
+        if (metaStatus === "not_recorded") {
+          banner.textContent = "No integration sync has been recorded yet.";
+          banner.classList.add("visible", "info");
+        }
+        return;
+      }
+
+      const parsed = new Date(iso);
+      if (Number.isNaN(parsed.getTime())) {
+        return;
+      }
+      const diffMs = Date.now() - parsed.getTime();
+      if (diffMs < 0) {
+        return;
+      }
+      const diffMinutes = Math.round(diffMs / 60000);
+      if (diffMinutes <= SYNC_STALE_MINUTES) {
+        return;
+      }
+      const minutesText = diffMinutes === 1 ? "1 minute" : `${diffMinutes} minutes`;
+      banner.textContent = `Last sync ${minutesText} ago`;
+      banner.classList.add("visible");
+    }
+
+    async function loadLastSync() {
+      try {
+        const response = await fetch("/metrics/last_sync");
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`);
+        }
+        const payload = await response.json();
+        state.lastSyncIso = payload && typeof payload.last_sync === "string" ? payload.last_sync : null;
+        state.lastSyncMeta = payload && typeof payload === "object" && payload.meta ? payload.meta : {};
+        state.lastSyncError = false;
+      } catch (error) {
+        console.error(error);
+        state.lastSyncIso = null;
+        state.lastSyncMeta = {};
+        state.lastSyncError = true;
+      }
+      renderSyncBanner();
+    }
 
     async function loadFlagged() {
       const params = new URLSearchParams();
@@ -615,11 +685,13 @@ def create_app(
     document.getElementById("refresh-btn")?.addEventListener("click", () => {
       loadImpact();
       loadFlagged();
+      loadLastSync();
     });
     document.getElementById("print-btn")?.addEventListener("click", printLabels);
 
     loadImpact();
     loadFlagged();
+    loadLastSync();
   </script>
 </body>
 </html>
@@ -655,6 +727,25 @@ def create_app(
         payload = serialize_inventory_events(records)
         meta["count"] = len(payload)
         return {"events": payload, "meta": meta}
+
+    @app.get("/metrics/last_sync", response_class=JSONResponse)
+    def metrics_last_sync() -> dict[str, object]:
+        try:
+            store = store_provider()
+        except Exception:
+            app_logger.exception("Failed to initialize event store for last sync metric")
+            return {"last_sync": None, "meta": {"source": "database", "error": "store_init_failed"}}
+        try:
+            timestamp = store.get_last_integration_sync()
+        except Exception:
+            app_logger.exception("Failed to retrieve last integration sync timestamp")
+            return {"last_sync": None, "meta": {"source": "database", "error": "query_failed"}}
+
+        iso_value = timestamp.astimezone(timezone.utc).isoformat() if timestamp else None
+        meta: dict[str, object] = {"source": "database"}
+        if iso_value is None:
+            meta["status"] = "not_recorded"
+        return {"last_sync": iso_value, "meta": meta}
 
     @app.get("/metrics/summary", response_class=JSONResponse)
     def metrics_summary() -> dict[str, object]:

@@ -104,5 +104,38 @@ class EventStore:
         total = totals_row["total"] if totals_row is not None else 0
         return {"total_events": total, "events_by_type": by_type}
 
+    def record_integration_sync(self, timestamp: datetime) -> None:
+        """Persist the timestamp of the latest integration sync."""
+
+        ts_value = timestamp.astimezone(timezone.utc).isoformat()
+        updated_value = datetime.now(timezone.utc).isoformat()
+        with db_session(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO integration_runs (id, last_sync, updated_at)
+                VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET last_sync=excluded.last_sync, updated_at=excluded.updated_at
+                """,
+                (ts_value, updated_value),
+            )
+
+    def get_last_integration_sync(self) -> datetime | None:
+        """Return the timestamp of the most recent integration sync if recorded."""
+
+        with db_session(self.db_path) as conn:
+            row = conn.execute("SELECT last_sync FROM integration_runs WHERE id = 1").fetchone()
+        if row is None:
+            return None
+        raw_value = row["last_sync"]
+        if not isinstance(raw_value, str):
+            return None
+        try:
+            parsed = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
 
 __all__ = ["EventStore", "InventoryEvent"]

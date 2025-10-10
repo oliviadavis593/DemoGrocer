@@ -24,6 +24,15 @@ CREATE TABLE IF NOT EXISTS inventory_events (
 )
 """
 
+CREATE_INTEGRATION_RUNS_TABLE = """
+CREATE TABLE IF NOT EXISTS integration_runs (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    last_sync TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (DATETIME('now')),
+    updated_at TEXT NOT NULL DEFAULT (DATETIME('now'))
+)
+"""
+
 CREATE_TS_INDEX = "CREATE INDEX IF NOT EXISTS idx_inventory_events_ts ON inventory_events (ts)"
 CREATE_TYPE_TS_INDEX = (
     "CREATE INDEX IF NOT EXISTS idx_inventory_events_type_ts ON inventory_events (type, ts)"
@@ -36,6 +45,7 @@ def run(db_path: Path | None = None) -> Path:
     target_path = ensure_db_path(db_path)
     with db_session(target_path) as conn:
         conn.execute(CREATE_EVENTS_TABLE)
+        conn.execute(CREATE_INTEGRATION_RUNS_TABLE)
         conn.execute(CREATE_TS_INDEX)
         conn.execute(CREATE_TYPE_TS_INDEX)
     LOGGER.info("Database migrated at %s", target_path)
