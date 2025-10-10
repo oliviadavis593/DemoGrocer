@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from packages.odoo_client import OdooClientError
+from packages.decision.policy import DEFAULT_POLICY_PATH as DEFAULT_DECISION_POLICY_PATH, DecisionMapper
 
 from services.integration.config import DEFAULT_CONFIG_PATH, IntegrationConfig, load_config
 from services.integration.odoo_service import OdooService
@@ -125,9 +126,46 @@ def cmd_detect(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_decisions(args: argparse.Namespace) -> int:
+    config_path = Path(args.config) if args.config else DEFAULT_CONFIG_PATH
+    config = _load_config(config_path)
+
+    _configure_logging(config.log_level)
+    logger = logging.getLogger("foodflow.integration.runner")
+
+    policy_path = Path(args.policy) if args.policy else DEFAULT_DECISION_POLICY_PATH
+    try:
+        mapper = DecisionMapper.from_path(policy_path)
+    except Exception:
+        logger.exception("Failed to load decision policy from %s", policy_path)
+        return 1
+
+    service = _build_service(config, logger.getChild("service"))
+    try:
+        flags = detect_flags(
+            service,
+            near_expiry_days=args.days,
+            low_movement_window_days=args.movement_window,
+            low_movement_min_units=args.min_units,
+            overstock_window_days=args.overstock_window,
+            overstock_target_days=args.target_days,
+        )
+    except OdooClientError:
+        logger.exception("Integration decisions failed due to Odoo authentication error")
+        return 1
+    except Exception:
+        logger.exception("Integration decisions failed with an unexpected error")
+        return 1
+
+    decisions = mapper.map_flags(flags)
+    payload = [decision.to_dict() for decision in decisions]
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="FoodFlow integration service runner")
-    parser.add_argument("command", choices=["sync", "snapshot", "detect"], help="Command to execute")
+    parser.add_argument("command", choices=["sync", "snapshot", "detect", "decisions"], help="Command to execute")
     parser.add_argument(
         "-c",
         "--config",
@@ -169,6 +207,11 @@ def main(argv: list[str] | None = None) -> int:
         default=21.0,
         help="Target days of supply threshold for overstock detection (default: %(default)s)",
     )
+    parser.add_argument(
+        "--policy",
+        default=str(DEFAULT_DECISION_POLICY_PATH),
+        help="Path to decision policy YAML file (default: %(default)s)",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "sync":
@@ -177,6 +220,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_snapshot(args)
     if args.command == "detect":
         return cmd_detect(args)
+    if args.command == "decisions":
+        return cmd_decisions(args)
     parser.error(f"Unknown command {args.command}")
     return 1
 

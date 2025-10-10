@@ -1,0 +1,24 @@
+default:
+  outcome: DIVERT
+  notes: Review with store manager
+rules:
+  - reason: near_expiry
+    outcome: MARKDOWN
+    price_markdown_pct: 0.35
+    notes: Discount near-expiry stock
+  - reason: overstock
+    outcome: MARKDOWN
+    price_markdown_pct: 0.2
+    notes: Reduce price to clear overstock
+  - reason: low_movement
+    perishable: false
+    outcome: DONATE
+    notes: Donate shelf-stable slow movers
+  - reason: low_movement
+    perishable: true
+    outcome: MARKDOWN
+    price_markdown_pct: 0.15
+    notes: Discount slow movers with shelf life
+  - reason: recall
+    outcome: RECALL_QUARANTINE
+    notes: Quarantine recalled inventory immediately

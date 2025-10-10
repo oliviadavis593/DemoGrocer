@@ -207,6 +207,13 @@ def _build_flag_record(
         "reason": reason,
         "metrics": dict(metrics),
     }
+    if row:
+        life_date = row.get("life_date")
+        if life_date not in (None, "", "null", "None"):
+            record["life_date"] = str(life_date)
+        category = row.get("category")
+        if category:
+            record["category"] = str(category)
     if quantity is not None:
         record["quantity"] = round(float(quantity), 4)
     else:

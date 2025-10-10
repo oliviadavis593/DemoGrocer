@@ -152,6 +152,7 @@ class OdooService:
                     "locations": [],
                     "life_date": quant.life_date.isoformat() if quant.life_date else None,
                     "default_code": quant.default_code,
+                    "category": quant.category,
                 }
                 aggregated[key] = entry
                 location_sets[key] = set()
