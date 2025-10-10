@@ -1,6 +1,7 @@
 """Data loading utilities for the reporting web app."""
 from __future__ import annotations
 
+from functools import lru_cache
 import heapq
 import itertools
 import json
@@ -14,6 +15,9 @@ from services.simulator.inventory import InventorySnapshot, QuantRecord
 
 DEFAULT_EVENTS_PATH = Path(os.getenv("FOODFLOW_EVENTS_PATH", "out/events.jsonl"))
 DEFAULT_FLAGGED_PATH = Path(os.getenv("FOODFLOW_FLAGGED_PATH", "out/flagged.json"))
+FALLBACK_CASE_UNITS = 12.0
+MINIMUM_DISCOUNT_FACTOR = 0.0
+MAXIMUM_DISCOUNT_FACTOR = 1.0
 
 
 @dataclass
@@ -223,10 +227,137 @@ def load_flagged_decisions(path: Path | None = None) -> List[dict[str, object]]:
     return records
 
 
+def calculate_impact_metrics(records: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    """Estimate waste diversion (value) and donations (weight) from decisions."""
+
+    prices, uoms = _product_lookup()
+    diverted_value = 0.0
+    donated_weight = 0.0
+    markdown_count = 0
+    donation_count = 0
+
+    for record in records:
+        outcome = str(record.get("outcome") or "").upper()
+        quantity = _coerce_positive_float(
+            record.get("suggested_qty"), fallback=_coerce_positive_float(record.get("quantity"))
+        )
+        if quantity is None or quantity <= 0:
+            continue
+        code = str(record.get("default_code") or "").strip()
+        if outcome == "MARKDOWN":
+            price = _resolve_unit_price(record, code, prices)
+            if price is None or price <= 0:
+                continue
+            factor = _resolve_discount_factor(record)
+            diverted_value += quantity * price * factor
+            markdown_count += 1
+        elif outcome == "DONATE":
+            uom = _resolve_uom(record, code, uoms)
+            pounds = _convert_to_pounds(quantity, uom)
+            if pounds <= 0:
+                continue
+            donated_weight += pounds
+            donation_count += 1
+
+    return {
+        "diverted_value_usd": round(diverted_value, 2),
+        "donated_weight_lbs": round(donated_weight, 2),
+        "markdown_count": markdown_count,
+        "donation_count": donation_count,
+    }
+
+
+def _resolve_discount_factor(record: Mapping[str, object]) -> float:
+    discount = _coerce_positive_float(record.get("price_markdown_pct"), clamp=True)
+    if discount is None:
+        return 1.0
+    return max(
+        MINIMUM_DISCOUNT_FACTOR,
+        min(MAXIMUM_DISCOUNT_FACTOR, 1.0 - discount),
+    )
+
+
+def _resolve_unit_price(
+    record: Mapping[str, object],
+    code: str,
+    prices: Mapping[str, float],
+) -> float | None:
+    direct = _coerce_positive_float(record.get("list_price"), fallback=_coerce_positive_float(record.get("unit_price")))
+    if direct is not None:
+        return direct
+    if code and code in prices:
+        return prices[code]
+    return None
+
+
+def _resolve_uom(record: Mapping[str, object], code: str, uoms: Mapping[str, str]) -> str | None:
+    raw = record.get("uom") or record.get("unit_of_measure") or record.get("unit")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip().upper()
+    if code and code in uoms:
+        return uoms[code]
+    return None
+
+
+def _convert_to_pounds(quantity: float, uom: str | None) -> float:
+    if uom == "LB" or uom == "LBS":
+        return quantity
+    if uom == "OZ":
+        return quantity / 16.0
+    if uom == "CASE":
+        return quantity * FALLBACK_CASE_UNITS
+    # Treat EA and unknown units as approximate pounds to provide an estimate.
+    return quantity
+
+
+def _coerce_positive_float(value: object, *, fallback: float | None = None, clamp: bool = False) -> float | None:
+    candidate: float | None
+    try:
+        if value is None:
+            candidate = None
+        else:
+            candidate = float(value)
+    except (TypeError, ValueError):
+        candidate = None
+    if candidate is None or candidate <= 0:
+        candidate = fallback
+    if candidate is None:
+        return None
+    if clamp:
+        return max(0.0, min(1.0, candidate))
+    return candidate
+
+
+@lru_cache(maxsize=1)
+def _product_lookup() -> tuple[dict[str, float], dict[str, str]]:
+    prices: dict[str, float] = {}
+    uoms: dict[str, str] = {}
+    try:
+        from scripts.seed_inventory import _product_catalog  # type: ignore
+    except Exception:
+        return prices, uoms
+    try:
+        catalog = _product_catalog()
+    except Exception:
+        return prices, uoms
+    for entry in catalog:
+        code = str(entry.get("default_code") or "").strip()
+        if not code:
+            continue
+        price = _coerce_positive_float(entry.get("list_price"))
+        if price is not None:
+            prices[code] = price
+        uom_raw = entry.get("uom")
+        if isinstance(uom_raw, str) and uom_raw.strip():
+            uoms[code] = uom_raw.strip().upper()
+    return prices, uoms
+
+
 __all__ = [
     "AtRiskItem",
     "EventRecord",
     "calculate_at_risk",
+    "calculate_impact_metrics",
     "load_flagged_decisions",
     "load_recent_events",
     "serialize_at_risk",

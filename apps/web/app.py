@@ -36,7 +36,15 @@ from services.recall import QuarantinedItem, RecallResult, RecallService
 from services.simulator.events import EventWriter
 from services.simulator.inventory import InventoryRepository
 
-from .data import calculate_at_risk, load_flagged_decisions, load_recent_events, serialize_at_risk, serialize_events, serialize_inventory_events
+from .data import (
+    calculate_at_risk,
+    calculate_impact_metrics,
+    load_flagged_decisions,
+    load_recent_events,
+    serialize_at_risk,
+    serialize_events,
+    serialize_inventory_events,
+)
 
 EventsPathProvider = Callable[[], Path]
 RepositoryFactory = Callable[[], Optional[InventoryRepository]]
@@ -112,6 +120,7 @@ def create_app(
                 "events_recent": "/events/recent",
                 "events": "/events",
                 "metrics_summary": "/metrics/summary",
+                "metrics_impact": "/metrics/impact",
                 "at_risk": "/at-risk",
                 "flagged": "/flagged",
                 "dashboard_flagged": "/dashboard/flagged",
@@ -242,6 +251,39 @@ def create_app(
         }
         return {"items": filtered, "meta": meta}
 
+    def _empty_impact() -> dict[str, float]:
+        return {
+            "diverted_value_usd": 0.0,
+            "donated_weight_lbs": 0.0,
+            "markdown_count": 0,
+            "donation_count": 0,
+        }
+
+    @app.get("/metrics/impact", response_class=JSONResponse)
+    def metrics_impact() -> dict[str, object]:
+        flagged_path = flagged_provider()
+        exists = flagged_path.exists()
+        impact = _empty_impact()
+        meta: dict[str, object] = {
+            "source": str(flagged_path),
+            "exists": exists,
+        }
+        if not exists:
+            return {"impact": impact, "meta": meta}
+        try:
+            records = load_flagged_decisions(flagged_path)
+        except ValueError:
+            meta["error"] = "invalid_flagged_json"
+            return {"impact": impact, "meta": meta}
+        except OSError:
+            meta["error"] = "flagged_read_failed"
+            return {"impact": impact, "meta": meta}
+        meta["count"] = len(records)
+        impact_data = calculate_impact_metrics(records)
+        meta["markdown_count"] = impact_data.get("markdown_count", 0)
+        meta["donation_count"] = impact_data.get("donation_count", 0)
+        return {"impact": impact_data, "meta": meta}
+
     @app.get("/dashboard/flagged", response_class=HTMLResponse)
     def dashboard_flagged() -> HTMLResponse:
         html = """
@@ -253,9 +295,14 @@ def create_app(
   <style>
     :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     body { margin: 0; padding: 1.5rem; background: #f7f7f7; color: #111; }
-    header { margin-bottom: 1rem; }
+    header { margin-bottom: 1.5rem; }
     h1 { font-size: 1.6rem; margin: 0 0 0.25rem 0; }
     p.subtitle { margin: 0; color: #555; }
+    .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    .card { background: #fff; border-radius: 8px; padding: 1rem; box-shadow: 0 16px 24px rgba(15, 23, 42, 0.08); }
+    .card h2 { margin: 0; font-size: 1rem; letter-spacing: 0.02em; text-transform: uppercase; color: #475569; }
+    .metric { font-size: 1.8rem; font-weight: 600; margin: 0.35rem 0; color: #111827; }
+    .metric-caption { margin: 0; color: #4b5563; font-size: 0.9rem; }
     .controls { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; align-items: flex-end; }
     .controls label { display: flex; flex-direction: column; font-size: 0.9rem; gap: 0.25rem; min-width: 12rem; }
     select, button { padding: 0.4rem 0.6rem; font-size: 0.95rem; }
@@ -278,14 +325,30 @@ def create_app(
       tbody tr:hover { background: #1e293b; }
       select, button.primary, button.secondary { color: inherit; }
       button.secondary { background: #334155; }
+      .card { background: #1e293b; box-shadow: none; }
+      .card h2 { color: #cbd5f5; }
+      .metric { color: #f8fafc; }
+      .metric-caption { color: #94a3b8; }
     }
   </style>
 </head>
 <body>
   <header>
     <h1>Flagged Decisions Dashboard</h1>
-    <p class="subtitle">Review flagged inventory, filter by store, category, or reason, and print labels in bulk.</p>
+    <p class="subtitle">Review flagged inventory, monitor impact, filter by store, category, or reason, and print labels in bulk.</p>
   </header>
+  <section class="overview" aria-label="Impact overview">
+    <article class="card">
+      <h2>Waste Diverted</h2>
+      <p class="metric" id="impact-diverted">$0</p>
+      <p class="metric-caption">Estimated retail value preserved via markdowns</p>
+    </article>
+    <article class="card">
+      <h2>Donations</h2>
+      <p class="metric" id="impact-donated">0 lbs</p>
+      <p class="metric-caption">Estimated pounds redirected through donations</p>
+    </article>
+  </section>
   <section class="controls">
     <label>Store
       <select id="filter-store">
@@ -332,7 +395,8 @@ def create_app(
     const state = {
       filters: { store: "", category: "", reason: "" },
       data: [],
-      meta: {}
+      meta: {},
+      impact: { diverted_value_usd: 0, donated_weight_lbs: 0 }
     };
 
     async function loadFlagged() {
@@ -356,6 +420,46 @@ def create_app(
       } catch (error) {
         console.error(error);
         setStatus("Failed to load flagged decisions. See console for details.", "error");
+      }
+    }
+
+    async function loadImpact() {
+      try {
+        const response = await fetch("/metrics/impact");
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`);
+        }
+        const payload = await response.json();
+        const impact = payload && typeof payload === "object" ? payload.impact : null;
+        if (impact && typeof impact === "object") {
+          state.impact = impact;
+        } else {
+          state.impact = { diverted_value_usd: 0, donated_weight_lbs: 0 };
+        }
+      } catch (error) {
+        console.error(error);
+        state.impact = { diverted_value_usd: 0, donated_weight_lbs: 0 };
+      }
+      renderImpact();
+    }
+
+    function renderImpact() {
+      const divertedElement = document.getElementById("impact-diverted");
+      const donatedElement = document.getElementById("impact-donated");
+      if (divertedElement) {
+        const amount = Number(state.impact.diverted_value_usd || 0);
+        const decimals = amount < 1000 ? 2 : 0;
+        const formatter = new Intl.NumberFormat("en-US", {
+          style: "currency",
+          currency: "USD",
+          minimumFractionDigits: decimals,
+          maximumFractionDigits: decimals
+        });
+        divertedElement.textContent = formatter.format(amount);
+      }
+      if (donatedElement) {
+        const pounds = Number(state.impact.donated_weight_lbs || 0);
+        donatedElement.textContent = `${pounds.toFixed(1)} lbs`;
       }
     }
 
@@ -508,9 +612,13 @@ def create_app(
       state.filters.reason = (event.target.value || "").trim();
       loadFlagged();
     });
-    document.getElementById("refresh-btn")?.addEventListener("click", loadFlagged);
+    document.getElementById("refresh-btn")?.addEventListener("click", () => {
+      loadImpact();
+      loadFlagged();
+    });
     document.getElementById("print-btn")?.addEventListener("click", printLabels);
 
+    loadImpact();
     loadFlagged();
   </script>
 </body>

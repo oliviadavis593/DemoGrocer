@@ -204,7 +204,7 @@ Example requests:
 
 ```bash
 curl -s http://localhost:8000/
-# {"app":"FoodFlow reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","at_risk":"/at-risk","flagged":"/flagged","dashboard_flagged":"/dashboard/flagged","labels_markdown":"/labels/markdown","labels_index":"/out/labels/"},"docs":"See README.md for curl examples and Make targets."}
+# {"app":"FoodFlow reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","metrics_impact":"/metrics/impact","at_risk":"/at-risk","flagged":"/flagged","dashboard_flagged":"/dashboard/flagged","labels_markdown":"/labels/markdown","labels_index":"/out/labels/"},"docs":"See README.md for curl examples and Make targets."}
 
 curl -s http://localhost:8000/health
 # {"status":"ok"}
@@ -217,6 +217,9 @@ curl -s "http://localhost:8000/events?limit=5"
 
 curl -s "http://localhost:8000/metrics/summary"
 # {"events":{"total_events":120,"events_by_type":{"receiving":40,"sell_down":60,"daily_expiry":20}}, "meta":{"source":"database"}}
+
+curl -s "http://localhost:8000/metrics/impact"
+# {"impact":{"diverted_value_usd":418.75,"donated_weight_lbs":132.5,"markdown_count":24,"donation_count":6},"meta":{"source":"out/flagged.json","exists":true,"count":30}}
 
 curl -s "http://localhost:8000/at-risk?days=3"
 # {"items":[{"default_code":"FF101","product":"Whole Milk","lot":"LOT-FF101","days_left":2,"quantity":5.0}],

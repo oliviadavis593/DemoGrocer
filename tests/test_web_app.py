@@ -69,6 +69,7 @@ def test_root_endpoint_lists_links() -> None:
     assert payload["status"] == "ok"
     assert "/health" in payload["links"].values()
     assert payload["links"]["events"] == "/events"
+    assert payload["links"]["metrics_impact"] == "/metrics/impact"
     assert payload["links"]["recall_trigger"] == "/recall/trigger"
 
 
@@ -492,6 +493,47 @@ def test_flagged_endpoint_applies_filters(tmp_path: Path) -> None:
     assert payload["meta"]["active_filters"]["store"] == "Downtown"
 
 
+def test_metrics_impact_summarizes_decisions(tmp_path: Path) -> None:
+    flagged_path = tmp_path / "flagged.json"
+    data = [
+        {
+            "default_code": "FF101",
+            "outcome": "MARKDOWN",
+            "price_markdown_pct": 0.2,
+            "suggested_qty": 5.0,
+        },
+        {
+            "default_code": "FF102",
+            "outcome": "MARKDOWN",
+            "price_markdown_pct": 0.15,
+            "suggested_qty": 2.0,
+        },
+        {
+            "default_code": "FF150",
+            "outcome": "DONATE",
+            "suggested_qty": 4.0,
+        },
+    ]
+    flagged_path.write_text(json.dumps(data), encoding="utf-8")
+
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        flagged_path_provider=lambda: flagged_path,
+    )
+    client = TestClient(app)
+
+    response = client.get("/metrics/impact")
+    assert response.status_code == 200
+    payload = response.json()
+    impact = payload["impact"]
+    assert impact["diverted_value_usd"] == 17.89
+    assert impact["donated_weight_lbs"] == 4.0
+    assert payload["meta"]["count"] == 3
+    assert payload["meta"]["markdown_count"] == 2
+    assert payload["meta"]["donation_count"] == 1
+
+
 def test_dashboard_flagged_page_renders(tmp_path: Path) -> None:
     flagged_path = tmp_path / "flagged.json"
     flagged_path.write_text(
@@ -522,6 +564,7 @@ def test_dashboard_flagged_page_renders(tmp_path: Path) -> None:
     content = response.text
     assert "Flagged Decisions Dashboard" in content
     assert "/flagged" in content
+    assert "impact-diverted" in content
 
 
 def test_labels_index_handles_missing_directory(tmp_path: Path) -> None:
