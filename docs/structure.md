@@ -90,5 +90,7 @@ The FastAPI service in `apps/web` exposes the following JSON endpoints:
 | `/dashboard/flagged` | GET | Serves an HTML dashboard that fetches `/flagged`, applies client-side filters, and triggers label generation via `/labels/markdown`. |
 | `/labels/markdown` | POST | Generates printable PDF labels for provided `default_codes`, useful for spot-checking or demo scenarios. |
 | `/out/labels/` | GET | Lists generated label PDFs so you can quickly download or inspect the latest artifacts under `out/labels`. |
+| `/export/flagged.csv` | GET | Streams a CSV with `default_code, product, lot, reason, outcome, suggested_qty, quantity, unit, price_markdown_pct, store, stores, category, notes`; accepts the same filters as `/flagged` and requires an `api_key` query parameter when `FOODFLOW_WEB_API_KEY` (or `FOODFLOW_API_KEY`) is set. |
+| `/export/events.csv` | GET | Exports CSV-formatted inventory events (`timestamp, type, product, lot, quantity, before_quantity, after_quantity, source`) while respecting the `limit`, `type`, and `since` filters and the optional API key guard. |
 
 Routes depend on shared helpers: the `OdooClient` for live data and `EventStore` for persisted simulator events.

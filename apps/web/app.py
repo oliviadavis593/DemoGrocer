@@ -1,14 +1,17 @@
 """FastAPI application exposing resilient reporting endpoints."""
 from __future__ import annotations
 
+import csv
+import io
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, Mapping, Optional, Sequence, Tuple
 
 from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 try:  # pragma: no cover - optional dependency
     from pydantic import BaseModel
@@ -55,6 +58,31 @@ RecallServiceFactory = Callable[[], Optional[RecallService]]
 FlaggedPathProvider = Callable[[], Path]
 
 _DURATION_RE = re.compile(r"^(?P<value>\d+)(?P<unit>[dhm])$")
+FLAGGED_CSV_HEADERS: tuple[str, ...] = (
+    "default_code",
+    "product",
+    "lot",
+    "reason",
+    "outcome",
+    "suggested_qty",
+    "quantity",
+    "unit",
+    "price_markdown_pct",
+    "store",
+    "stores",
+    "category",
+    "notes",
+)
+EVENTS_CSV_HEADERS: tuple[str, ...] = (
+    "timestamp",
+    "type",
+    "product",
+    "lot",
+    "quantity",
+    "before_quantity",
+    "after_quantity",
+    "source",
+)
 
 
 class RecallTriggerPayload(BaseModel):
@@ -83,6 +111,8 @@ def create_app(
     labels_provider = labels_path_provider or _default_labels_path
     recall_provider = recall_service_factory
     flagged_provider = flagged_path_provider or _default_flagged_path
+
+    api_key_env = os.getenv("FOODFLOW_WEB_API_KEY") or os.getenv("FOODFLOW_API_KEY")
 
     def _build_recall_service() -> Optional[RecallService]:
         nonlocal recall_provider
@@ -129,6 +159,8 @@ def create_app(
                 "labels_index": "/out/labels/",
                 "recall_trigger": "/recall/trigger",
                 "recall_quarantined": "/recall/quarantined",
+                "flagged_export": "/export/flagged.csv",
+                "events_export": "/export/events.csv",
             },
             "docs": "See README.md for curl examples and Make targets.",
         }
@@ -251,6 +283,13 @@ def create_app(
             "reasons": sorted(reasons_set),
         }
         return {"items": filtered, "meta": meta}
+
+    def _require_api_key(candidate: str | None) -> None:
+        if not api_key_env:
+            return
+        if candidate == api_key_env:
+            return
+        raise HTTPException(401, {"error": "unauthorized"})
 
     def _empty_impact() -> dict[str, float]:
         return {
@@ -728,6 +767,34 @@ def create_app(
         meta["count"] = len(payload)
         return {"events": payload, "meta": meta}
 
+    @app.get("/export/flagged.csv")
+    def export_flagged_csv(
+        store: str | None = Query(None),
+        category: str | None = Query(None),
+        reason: str | None = Query(None),
+        api_key: str | None = Query(None),
+    ) -> Response:
+        _require_api_key(api_key)
+        result = flagged(store=store, category=category, reason=reason)
+        items = result.get("items", [])
+        rows = _serialize_flagged_csv_rows(items)
+        csv_text = _render_csv(rows, FLAGGED_CSV_HEADERS)
+        return _csv_response(csv_text, filename="flagged.csv")
+
+    @app.get("/export/events.csv")
+    def export_events_csv(
+        limit: int = Query(100, ge=1, le=1000),
+        type: str | None = Query(None),
+        since: str | None = Query(None),
+        api_key: str | None = Query(None),
+    ) -> Response:
+        _require_api_key(api_key)
+        result = events(limit=limit, type=type, since=since)
+        entries = result.get("events", [])
+        rows = _serialize_events_csv_rows(entries)
+        csv_text = _render_csv(rows, EVENTS_CSV_HEADERS)
+        return _csv_response(csv_text, filename="events.csv")
+
     @app.get("/metrics/last_sync", response_class=JSONResponse)
     def metrics_last_sync() -> dict[str, object]:
         try:
@@ -936,6 +1003,98 @@ def create_app(
         return _labels_directory_listing(output_dir)
 
     return app
+
+
+def _serialize_flagged_csv_rows(items: Sequence[Mapping[str, object]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for entry in items:
+        if not isinstance(entry, Mapping):
+            continue
+        row = {
+            "default_code": _stringify(entry.get("default_code")),
+            "product": _stringify(entry.get("product")),
+            "lot": _stringify(entry.get("lot")),
+            "reason": _stringify(entry.get("reason")),
+            "outcome": _stringify(entry.get("outcome")),
+            "suggested_qty": _stringify(entry.get("suggested_qty")),
+            "quantity": _stringify(entry.get("quantity")),
+            "unit": _stringify(entry.get("unit") or entry.get("unit_of_measure") or entry.get("uom")),
+            "price_markdown_pct": _stringify(entry.get("price_markdown_pct")),
+            "store": _stringify(entry.get("store")),
+            "stores": _stringify_sequence(entry.get("stores")),
+            "category": _stringify(entry.get("category")),
+            "notes": _stringify(entry.get("notes")),
+        }
+        rows.append(row)
+    return rows
+
+
+def _serialize_events_csv_rows(entries: Sequence[Mapping[str, object]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        row = {
+            "timestamp": _stringify(entry.get("ts") or entry.get("timestamp")),
+            "type": _stringify(entry.get("type")),
+            "product": _stringify(entry.get("product")),
+            "lot": _stringify(entry.get("lot")),
+            "quantity": _stringify(entry.get("qty") or entry.get("quantity")),
+            "before_quantity": _stringify(entry.get("before") or entry.get("before_qty") or entry.get("before_quantity")),
+            "after_quantity": _stringify(entry.get("after") or entry.get("after_qty") or entry.get("after_quantity")),
+            "source": _stringify(entry.get("source")),
+        }
+        rows.append(row)
+    return rows
+
+
+def _render_csv(rows: Sequence[Mapping[str, str]], headers: Sequence[str]) -> str:
+    buffer = io.StringIO()
+    writer = csv.DictWriter(
+        buffer,
+        fieldnames=list(headers),
+        extrasaction="ignore",
+        lineterminator="\r\n",
+    )
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({key: row.get(key, "") for key in headers})
+    return buffer.getvalue()
+
+
+def _csv_response(text: str, *, filename: str) -> Response:
+    payload = text if text.startswith("\ufeff") else f"\ufeff{text}"
+    try:
+        response = Response(payload, media_type="text/csv; charset=utf-8")
+    except TypeError:
+        response = Response(payload)
+        response.media_type = "text/csv; charset=utf-8"
+    else:
+        response.media_type = "text/csv; charset=utf-8"
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        headers = {}
+        setattr(response, "headers", headers)
+    headers.setdefault("Content-Type", "text/csv; charset=utf-8")
+    headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+def _stringify(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return f"{value:.10g}"
+    return str(value)
+
+
+def _stringify_sequence(value: object) -> str:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        parts = [text for item in value if (text := _stringify(item))]
+        return "; ".join(parts)
+    return _stringify(value)
 
 
 def _coerce_int(

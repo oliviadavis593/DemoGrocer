@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -12,6 +14,13 @@ from packages.db import EventStore, InventoryEvent
 from scripts.db_migrate import run as run_migration
 from services.recall import QuarantinedItem, RecallResult
 from services.simulator.inventory import QuantRecord
+
+
+def _media_type(response):
+    media_type = getattr(response, "media_type", None)
+    if media_type is None and hasattr(response, "headers"):
+        return response.headers.get("content-type")
+    return media_type
 
 
 def test_load_recent_events_orders_and_limits(tmp_path: Path) -> None:
@@ -493,6 +502,92 @@ def test_flagged_endpoint_applies_filters(tmp_path: Path) -> None:
     assert payload["meta"]["active_filters"]["store"] == "Downtown"
 
 
+def test_export_flagged_csv_includes_headers(tmp_path: Path) -> None:
+    flagged_path = tmp_path / "flagged.json"
+    data = [
+        {
+            "default_code": "FF101",
+            "product": "Gala Apples",
+            "lot": "LOT-1",
+            "reason": "low_movement",
+            "outcome": "MARKDOWN",
+            "suggested_qty": 12.5,
+            "quantity": 10,
+            "unit": "EA",
+            "price_markdown_pct": 0.15,
+            "store": "Downtown",
+            "stores": ["Downtown", "Warehouse"],
+            "category": "Produce",
+            "notes": "Discount gently",
+        }
+    ]
+    flagged_path.write_text(json.dumps(data), encoding="utf-8")
+
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        flagged_path_provider=lambda: flagged_path,
+    )
+    client = TestClient(app)
+
+    response = client.get("/export/flagged.csv")
+    assert response.status_code == 200
+    assert "text/csv" in (_media_type(response) or "")
+    text = response.text
+    assert text.startswith("\ufeff")
+    reader = list(csv.reader(io.StringIO(text.lstrip("\ufeff"))))
+    assert reader[0] == [
+        "default_code",
+        "product",
+        "lot",
+        "reason",
+        "outcome",
+        "suggested_qty",
+        "quantity",
+        "unit",
+        "price_markdown_pct",
+        "store",
+        "stores",
+        "category",
+        "notes",
+    ]
+    assert reader[1] == [
+        "FF101",
+        "Gala Apples",
+        "LOT-1",
+        "low_movement",
+        "MARKDOWN",
+        "12.5",
+        "10",
+        "EA",
+        "0.15",
+        "Downtown",
+        "Downtown; Warehouse",
+        "Produce",
+        "Discount gently",
+    ]
+
+
+def test_export_flagged_csv_requires_api_key(tmp_path: Path, monkeypatch) -> None:
+    flagged_path = tmp_path / "flagged.json"
+    flagged_path.write_text("[]", encoding="utf-8")
+    monkeypatch.setenv("FOODFLOW_WEB_API_KEY", "secret")
+
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        flagged_path_provider=lambda: flagged_path,
+    )
+    client = TestClient(app)
+
+    unauthorized = client.get("/export/flagged.csv")
+    assert unauthorized.status_code == 401
+
+    authorized = client.get("/export/flagged.csv", params={"api_key": "secret"})
+    assert authorized.status_code == 200
+    assert "text/csv" in (_media_type(authorized) or "")
+
+
 def test_metrics_impact_summarizes_decisions(tmp_path: Path) -> None:
     flagged_path = tmp_path / "flagged.json"
     data = [
@@ -636,6 +731,68 @@ def test_events_endpoint_filters_by_type_and_since(tmp_path: Path) -> None:
     assert payload["meta"]["type"] == "receiving"
     assert payload["events"][0]["product"] == "Gala Apples"
     assert payload["events"][0]["lot"] == "LOT-1"
+
+
+def test_export_events_csv_filters_results(tmp_path: Path) -> None:
+    db_path = tmp_path / "events.db"
+    run_migration(db_path)
+    store = EventStore(db_path)
+    timestamp = datetime(2024, 1, 12, 15, 30, tzinfo=timezone.utc)
+    store.add_events(
+        [
+            InventoryEvent(
+                ts=timestamp,
+                type="receiving",
+                product="Gala Apples",
+                lot="LOT-1",
+                qty=5.0,
+                before=10.0,
+                after=15.0,
+            ),
+            InventoryEvent(
+                ts=timestamp - timedelta(days=1),
+                type="sell_down",
+                product="Whole Milk",
+                lot="LOT-2",
+                qty=-2.0,
+                before=8.0,
+                after=6.0,
+            ),
+        ]
+    )
+
+    app = create_app(
+        events_path_provider=lambda: tmp_path / "unused.jsonl",
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        event_store_provider=lambda: EventStore(db_path),
+    )
+    client = TestClient(app)
+
+    response = client.get("/export/events.csv", params={"type": "receiving"})
+    assert response.status_code == 200
+    assert "text/csv" in (_media_type(response) or "")
+    rows = list(csv.reader(io.StringIO(response.text.lstrip("\ufeff"))))
+    assert rows[0] == [
+        "timestamp",
+        "type",
+        "product",
+        "lot",
+        "quantity",
+        "before_quantity",
+        "after_quantity",
+        "source",
+    ]
+    assert len(rows) == 2
+    entry = rows[1]
+    assert entry[0] == timestamp.isoformat()
+    assert entry[1] == "receiving"
+    assert entry[2] == "Gala Apples"
+    assert entry[3] == "LOT-1"
+    assert entry[4] == "5"
+    assert entry[5] == "10"
+    assert entry[6] == "15"
+    assert entry[7] == "simulator"
 
 
 def test_metrics_summary_reports_counts(tmp_path: Path) -> None:

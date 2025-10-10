@@ -204,7 +204,7 @@ Example requests:
 
 ```bash
 curl -s http://localhost:8000/
-# {"app":"FoodFlow reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","metrics_last_sync":"/metrics/last_sync","metrics_impact":"/metrics/impact","at_risk":"/at-risk","flagged":"/flagged","dashboard_flagged":"/dashboard/flagged","labels_markdown":"/labels/markdown","labels_index":"/out/labels/"},"docs":"See README.md for curl examples and Make targets."}
+# {"app":"FoodFlow reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","metrics_last_sync":"/metrics/last_sync","metrics_impact":"/metrics/impact","at_risk":"/at-risk","flagged":"/flagged","dashboard_flagged":"/dashboard/flagged","labels_markdown":"/labels/markdown","labels_index":"/out/labels/","flagged_export":"/export/flagged.csv","events_export":"/export/events.csv"},"docs":"See README.md for curl examples and Make targets."}
 
 curl -s http://localhost:8000/health
 # {"status":"ok"}
@@ -227,6 +227,15 @@ curl -s "http://localhost:8000/metrics/impact"
 curl -s "http://localhost:8000/at-risk?days=3"
 # {"items":[{"default_code":"FF101","product":"Whole Milk","lot":"LOT-FF101","days_left":2,"quantity":5.0}],
 #  "meta":{"days":3,"count":1}}
+
+curl -I "http://localhost:8000/export/flagged.csv"
+# HTTP/1.1 200 OK
+# content-type: text/csv; charset=utf-8
+# content-disposition: attachment; filename="flagged.csv"
+
+curl -s "http://localhost:8000/export/events.csv?type=receiving&since=7d" | head -n 3
+# timestamp,type,product,lot,quantity,before_quantity,after_quantity,source
+# 2024-01-12T15:30:00+00:00,receiving,Gala Apples,LOT-1,5,10,15,simulator
 
 curl -s -X POST "http://localhost:8000/labels/markdown" \
   -H "Content-Type: application/json" \
@@ -254,6 +263,11 @@ If `out/events.jsonl` is missing or contains invalid JSON, the API returns
 status. The `/at-risk` endpoint performs capability checks against Odoo
 (`stock.lot` model and the `life_date` field) and falls back to informative
 metadata (for example `{"reason": "no_life_date_field"}`) instead of erroring.
+
+#### CSV exports
+
+- `/export/flagged.csv` emits `default_code, product, lot, reason, outcome, suggested_qty, quantity, unit, price_markdown_pct, store, stores, category, notes`. Query parameters `store`, `category`, and `reason` mirror the JSON endpoint and the response defaults to UTF-8 with a BOM so Excel opens the file without manual encoding tweaks. When either `FOODFLOW_WEB_API_KEY` or `FOODFLOW_API_KEY` is set you must add `?api_key=...` (or include the same in your query parameters) or the service will reply with `401 Unauthorized`.
+- `/export/events.csv` shares the JSON filters (`limit`, `type`, `since`) and produces `timestamp, type, product, lot, quantity, before_quantity, after_quantity, source`. The same optional API key guard applies, so append `api_key` when the environment variable is configured.
 
 ### Tests
 
