@@ -111,6 +111,9 @@ PYTHONPATH=. python3 services/integration/runner.py decisions --days 7
 #   {"default_code": "...", "outcome": "DONATE", ...}
 # ]
 
+PYTHONPATH=. python3 services/integration/schedule.py once
+# INFO ... Wrote 6 flagged decisions to out/flagged.json
+
 make labels-demo
 # Generating labels for 2 product codes
 # Output directory: out/labels
@@ -130,6 +133,8 @@ Each command maps to a common developer workflow:
 - `PYTHONPATH=. python3 services/integration/runner.py snapshot --summary-limit 5` prints the current inventory count plus a few representative rows (product, lot, quantity, locations, expiry) without running the full sync automation.
 - `PYTHONPATH=. python3 services/integration/runner.py detect --days 7` runs the shrink detector once, aggregating inventory and sales velocity to emit a JSON list of near-expiry, low-movement, and overstock flags using the provided thresholds.
 - `PYTHONPATH=. python3 services/integration/runner.py decisions --days 7` reads the shrink flags, applies `config/decision_policy.yaml`, and prints reusable decision objects (e.g. `MARKDOWN`, `DONATE`, `RECALL_QUARANTINE`) with optional markdown guidance.
+- `PYTHONPATH=. python3 services/integration/schedule.py once` runs the integration shrink detector a single time, writing the mapped decision payload to `out/flagged.json` so downstream tooling (or `curl http://localhost:8000/flagged`) can inspect the latest output.
+- `PYTHONPATH=. python3 services/integration/schedule.py start --interval 10` launches the background scheduler and lightweight HTTP server that refreshes `out/flagged.json` every N minutes and serves `/flagged` alongside `/health` on port 8000.
 - `make labels-demo` renders sample product labels to PDF under `out/labels`.
 - `make web` starts the FastAPI reporting server so `/health` returns 200 once the app is ready.
 
@@ -141,6 +146,7 @@ tail -n 50 out/events.jsonl | grep -E '"type":"(returns|shrink|flag_low_movement
 
 curl -s "http://localhost:8000/events?type=flag_low_movement&since=7d" | head
 curl -s "http://localhost:8000/events?type=flag_overstock&since=7d" | head
+curl -s "http://localhost:8000/flagged" | jq
 ```
 
 Shrink trigger thresholds live in `config/shrink_triggers.yaml`. Tweak the sales window, minimum units sold, or per-category days-of-supply limits and re-run `make simulate` to observe how many `flag_low_movement` and `flag_overstock` events the detector emits.

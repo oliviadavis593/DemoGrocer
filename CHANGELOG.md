@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - Additional integration service unit tests verifying snapshot aggregation, sales velocity sourcing, and location grouping behaviour.
 - Shrink detector utilities for the integration service plus a `detect` subcommand (`PYTHONPATH=. python3 services/integration/runner.py detect --days 7`) that emits near-expiry, low-movement, and overstock flags with supporting metrics, alongside dedicated documentation and pytest coverage.
 - Decision policy engine that maps shrink detector flags to reusable decision objects via `config/decision_policy.yaml`, exposes a `decisions` runner command (`PYTHONPATH=. python3 services/integration/runner.py decisions`), and adds pytest coverage for the mapper logic.
+- Integration scheduler (`services/integration/schedule.py`) that periodically maps shrink flags to decisions, writes `out/flagged.json`, and exposes `/flagged` plus `/health` on port 8000 for downstream consumers.
 
 ## [0.2.0] - 2025-10-09
 ### Added
