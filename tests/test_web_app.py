@@ -415,12 +415,16 @@ def test_markdown_labels_generate_pdfs(tmp_path: Path) -> None:
     response = client.post("/labels/markdown", json={"default_codes": ["FF101", "FF102"]})
     assert response.status_code == 200
     payload = response.json()
-    assert payload["meta"]["count"] == 2
-    assert payload["links"]["FF101"].endswith("FF101.pdf")
+    assert payload["count"] == 2
+    generated = {entry["code"]: entry for entry in payload["generated"]}
+    assert generated.keys() == {"FF101", "FF102"}
+    for code, entry in generated.items():
+        assert entry["path"].endswith(f"{code}.pdf")
+        assert entry["url"] == f"/static/labels/{code}.pdf"
     assert (output_dir / "FF101.pdf").exists()
     assert (output_dir / "FF102.pdf").exists()
-    for label in payload["labels"]:
-        pdf_path = Path(label["path"])
+    for entry in payload["generated"]:
+        pdf_path = Path(entry["path"])
         assert pdf_path.exists()
         assert pdf_path.read_bytes().startswith(b"%PDF")
 
@@ -430,6 +434,65 @@ def test_markdown_labels_generate_pdfs(tmp_path: Path) -> None:
     assert index_payload["meta"]["count"] == 2
     filenames = {item["filename"] for item in index_payload["labels"]}
     assert filenames == {"FF101.pdf", "FF102.pdf"}
+    urls = {item["url"] for item in index_payload["labels"]}
+    assert urls == {"/static/labels/FF101.pdf", "/static/labels/FF102.pdf"}
+
+    combined = client.post("/labels/markdown?combined=true", json={"default_codes": ["FF101", "FF102"]})
+    assert combined.status_code == 200
+    assert combined.headers["content-type"].startswith("application/pdf")
+    assert combined.content.startswith(b"%PDF")
+
+
+def test_markdown_labels_combined_cached(tmp_path: Path) -> None:
+    output_dir = tmp_path / "labels"
+
+    class FakeClient:
+        def search_read(self, model, domain, fields=None, limit=None, order=None):
+            assert model == "product.product"
+            return [
+                {
+                    "id": 10,
+                    "name": "Gala Apples",
+                    "default_code": "FF101",
+                    "barcode": "1234567890123",
+                    "categ_id": [1, "Produce"],
+                    "description": "Sweet and crisp apples.",
+                },
+                {
+                    "id": 11,
+                    "name": "Whole Milk",
+                    "default_code": "FF102",
+                    "categ_id": [2, "Dairy"],
+                },
+            ]
+
+    app = create_app(
+        events_path_provider=lambda: tmp_path / "events.jsonl",
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: FakeClient(),
+        labels_path_provider=lambda: output_dir,
+    )
+    client = TestClient(app)
+
+    first = client.post("/labels/markdown?combined=true", json={"default_codes": ["FF101", "FF102"]})
+    assert first.status_code == 200
+    combined_files = sorted(output_dir.glob("labels-combined-*.pdf"))
+    assert len(combined_files) == 1
+    combined_path = combined_files[0]
+    first_mtime = combined_path.stat().st_mtime
+    first_bytes = combined_path.read_bytes()
+
+    second = client.post("/labels/markdown?combined=true", json={"default_codes": ["FF101", "FF102"]})
+    assert second.status_code == 200
+    assert second.content.startswith(b"%PDF")
+    assert combined_path.read_bytes() == first_bytes
+    assert combined_path.stat().st_mtime == first_mtime
+
+    listing = client.get("/out/labels/")
+    assert listing.status_code == 200
+    payload = listing.json()
+    filenames = {item["filename"] for item in payload["labels"]}
+    assert combined_path.name in filenames
 
 
 def test_markdown_labels_validates_payload() -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Tuple
 from urllib.parse import parse_qs
@@ -23,6 +24,25 @@ def _is_pydantic_model(annotation: Any) -> bool:
 from . import responses
 
 RouteKey = Tuple[str, str]
+
+
+def _compile_path(path: str) -> tuple[Optional[re.Pattern[str]], tuple[str, ...]]:
+    if "{" not in path:
+        return None, ()
+    expr = "^"
+    params: list[str] = []
+    last = 0
+    for match in re.finditer(r"{([^}:]+)(?::([^}]+))?}", path):
+        expr += re.escape(path[last:match.start()])
+        name, converter = match.group(1), match.group(2) or "segment"
+        params.append(name)
+        if converter == "path":
+            expr += f"(?P<{name}>.+)"
+        else:
+            expr += f"(?P<{name}>[^/]+)"
+        last = match.end()
+    expr += re.escape(path[last:]) + "$"
+    return re.compile(expr), tuple(params)
 
 
 class HTTPException(Exception):
@@ -63,6 +83,7 @@ class Route:
     method: str
     handler: Callable[..., Any]
     response_class: Optional[type] = None
+    pattern: Optional[re.Pattern[str]] = None
 
 
 class FastAPI:
@@ -71,25 +92,50 @@ class FastAPI:
     def __init__(self, *, title: str | None = None) -> None:
         self.title = title or "FastAPI"
         self.routes: Dict[RouteKey, Route] = {}
+        self.dynamic_routes: list[Route] = []
         self.dependency_overrides: Dict[Callable[..., Any], Callable[..., Any]] = {}
         self.exception_handlers: Dict[type[BaseException], Callable[[BaseException], Any]] = {}
+        self.mounts: list[tuple[str, Any, Optional[str]]] = []
 
     # Route registration -----------------------------------------------------------------
-    def get(self, path: str, *, response_class: Optional[type] = None) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def get(
+        self,
+        path: str,
+        *,
+        response_class: Optional[type] = None,
+        **_kwargs: Any,
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-            self.routes[(path, "GET")] = Route(path, "GET", func, response_class)
+            pattern, _ = _compile_path(path)
+            route = Route(path, "GET", func, response_class, pattern=pattern)
+            if pattern is None:
+                self.routes[(path, "GET")] = route
+            else:
+                self.dynamic_routes.append(route)
             return func
 
         return decorator
 
     def post(
-        self, path: str, *, response_class: Optional[type] = None
+        self,
+        path: str,
+        *,
+        response_class: Optional[type] = None,
+        **_kwargs: Any,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-            self.routes[(path, "POST")] = Route(path, "POST", func, response_class)
+            pattern, _ = _compile_path(path)
+            route = Route(path, "POST", func, response_class, pattern=pattern)
+            if pattern is None:
+                self.routes[(path, "POST")] = route
+            else:
+                self.dynamic_routes.append(route)
             return func
 
         return decorator
+
+    def mount(self, path: str, app: Any, name: Optional[str] = None) -> None:
+        self.mounts.append((path, app, name))
 
     # Request handling -------------------------------------------------------------------
     def _call(
@@ -185,12 +231,25 @@ class FastAPI:
         params: Optional[Mapping[str, Any]] = None,
         body: Any = None,
     ) -> responses.ClientResponse:
-        route = self.routes.get((path, method.upper()))
+        method_upper = method.upper()
+        route = self.routes.get((path, method_upper))
+        path_params: Dict[str, str] = {}
+        if not route:
+            for candidate in self.dynamic_routes:
+                if candidate.method != method_upper or candidate.pattern is None:
+                    continue
+                match = candidate.pattern.match(path)
+                if match:
+                    route = candidate
+                    path_params = match.groupdict()
+                    break
         if not route:
             response = responses.JSONResponse(content={"detail": "Not found"}, status_code=404)
             return responses.ClientResponse.from_response(response)
         try:
-            result = self._call(route.handler, params, body)
+            merged_params = dict(params or {})
+            merged_params.update(path_params)
+            result = self._call(route.handler, merged_params, body)
             response = self._build_response(result, route.response_class)
         except HTTPException as exc:
             response = responses.JSONResponse(content={"detail": exc.detail}, status_code=exc.status_code)
@@ -264,18 +323,22 @@ class FastAPI:
 
         try:
             client_response = self._handle_request(method, path, query_params, body_data)
-            body = client_response.text.encode("utf-8")
+            body = client_response.content
+            if isinstance(body, str):
+                body = body.encode("utf-8")
             status_code = client_response.status_code
-            media_type = client_response.media_type.encode("latin-1")
+            media_type_value = client_response.headers.get("content-type", client_response.media_type)
+            headers = [(k.encode("latin-1"), v.encode("latin-1")) for k, v in client_response.headers.items()]
+            if not any(key == b"content-type" for key, _ in headers) and media_type_value:
+                headers.append((b"content-type", media_type_value.encode("latin-1")))
         except Exception:
             body = b"Internal Server Error"
             status_code = 500
-            media_type = b"text/plain"
+            headers = [(b"content-type", b"text/plain")]
 
-        headers = [
-            (b"content-type", media_type),
-            (b"content-length", str(len(body)).encode("latin-1")),
-        ]
+        headers_dict = dict(headers)
+        headers_dict.setdefault("content-length".encode("latin-1"), str(len(body)).encode("latin-1"))
+        headers = list(headers_dict.items())
 
         await send({"type": "http.response.start", "status": status_code, "headers": headers})
         await send({"type": "http.response.body", "body": body, "more_body": False})

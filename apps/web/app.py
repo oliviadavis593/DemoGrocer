@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import html
 import io
 import logging
 import os
@@ -11,7 +13,8 @@ from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence, Tuple
 
 from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 try:  # pragma: no cover - optional dependency
     from pydantic import BaseModel
@@ -85,6 +88,8 @@ EVENTS_CSV_HEADERS: tuple[str, ...] = (
     "source",
 )
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 class RecallTriggerPayload(BaseModel):
     codes: Optional[Sequence[str]] = None
@@ -113,6 +118,12 @@ def create_app(
     recall_provider = recall_service_factory
     flagged_provider = flagged_path_provider or _default_flagged_path
 
+    assets_root = _resolve_repo_path(Path("out"))
+    try:
+        assets_root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        app_logger.exception("Failed to ensure static asset directory %s", assets_root)
+
     api_key_env = os.getenv("FOODFLOW_WEB_API_KEY") or os.getenv("FOODFLOW_API_KEY")
 
     def _build_recall_service() -> Optional[RecallService]:
@@ -132,6 +143,75 @@ def create_app(
         return RecallService(client, writer)
 
     app = FastAPI(title="FoodFlow Reporting API")
+    app.mount("/static", StaticFiles(directory=str(assets_root), html=True), name="static")
+
+    def _labels_root() -> Path:
+        return _resolve_repo_path(labels_provider()).resolve()
+
+    def _static_label_url(path: Path, *, labels_root: Path) -> str:
+        try:
+            relative = path.resolve().relative_to(labels_root)
+        except ValueError:
+            return "/static/" + path.name
+        return "/static/labels/" + relative.as_posix()
+
+    def _refresh_labels_static_index(directory: Path) -> None:
+        labels_root = _resolve_repo_path(directory).resolve()
+        try:
+            labels_root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            app_logger.exception("Failed to ensure labels directory %s", labels_root)
+            return
+        try:
+            pdf_files = sorted(
+                entry for entry in labels_root.iterdir() if entry.is_file() and entry.suffix.lower() == ".pdf"
+            )
+        except OSError:
+            app_logger.exception("Failed to list labels directory %s", labels_root)
+            return
+        index_path = labels_root / "index.html"
+        if not pdf_files:
+            if index_path.exists():
+                try:
+                    index_path.unlink()
+                except OSError:
+                    app_logger.debug("Unable to remove empty labels index at %s", index_path)
+            return
+        lines = [
+            "<!DOCTYPE html>",
+            "<html>",
+            "  <head>",
+            '    <meta charset="utf-8" />',
+            "    <title>FoodFlow Labels</title>",
+            "    <style>",
+            "      body { font-family: Helvetica, Arial, sans-serif; padding: 24px; }",
+            "      h1 { margin-bottom: 16px; font-size: 20px; }",
+            "      ul { list-style: none; padding: 0; }",
+            "      li { margin-bottom: 8px; }",
+            "      a { color: #2563eb; text-decoration: none; }",
+            "      a:hover { text-decoration: underline; }",
+            "    </style>",
+            "  </head>",
+            "  <body>",
+            "    <h1>Generated Labels</h1>",
+            "    <ul>",
+        ]
+        for entry in pdf_files:
+            url = _static_label_url(entry, labels_root=labels_root)
+            lines.append(
+                f'      <li><a href="{html.escape(url, quote=True)}">{html.escape(entry.name)}</a></li>'
+            )
+        lines.extend(
+            [
+                "    </ul>",
+                "  </body>",
+                "</html>",
+            ]
+        )
+        try:
+            index_path.write_text("\n".join(lines), encoding="utf-8")
+        except OSError:
+            app_logger.exception("Failed to write labels index at %s", index_path)
 
     @app.exception_handler(Exception)
     def _handle_unexpected(exc: Exception) -> JSONResponse:
@@ -368,10 +448,27 @@ def create_app(
     th { background: #f3f4f6; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; }
     tbody tr:hover { background: #f5faff; }
     .pill { display: inline-flex; align-items: center; padding: 0.15rem 0.4rem; border-radius: 999px; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; }
-    #status { margin-top: 1rem; min-height: 1.5rem; font-size: 0.95rem; }
-    #status.error { color: #b91c1c; }
-    #status.success { color: #0f766e; }
-    #status.info { color: #2563eb; }
+    #status {
+      margin: 0;
+      min-height: 1.5rem;
+      font-size: 0.95rem;
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+      background: #f8fafc;
+      color: #1f2937;
+      border: 1px solid transparent;
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    #status.hidden { display: none; }
+    #status.error { border-color: #b91c1c; background: #fef2f2; color: #b91c1c; }
+    #status.success { border-color: #0f766e; background: #ecfdf5; color: #0f766e; }
+    #status.info { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; }
+    #status a { color: inherit; text-decoration: underline; }
+    #status .status-links { display: inline-flex; flex-wrap: wrap; gap: 0.5rem; }
+    #status .status-view-all { margin-left: 0.5rem; font-size: 0.85rem; opacity: 0.8; }
     @media (prefers-color-scheme: dark) {
       body { background: #0f172a; color: #e2e8f0; }
       table { background: #1e293b; }
@@ -424,7 +521,8 @@ def create_app(
     </label>
     <div class="actions">
       <button class="secondary" id="refresh-btn" type="button">Refresh</button>
-      <button class="primary" id="print-btn" type="button">Print Labels</button>
+      <button class="primary" id="print-btn" type="button" disabled>Print Labels</button>
+      <div id="status" role="status" aria-live="polite" class="hidden"></div>
     </div>
   </section>
   <section>
@@ -447,7 +545,6 @@ def create_app(
       </tbody>
     </table>
   </section>
-  <div id="status" role="status" aria-live="polite"></div>
   <script>
     const state = {
       filters: { store: "", category: "", reason: "" },
@@ -664,6 +761,7 @@ def create_app(
 
         tbody.appendChild(row);
       }
+      updatePrintButtonState();
     }
 
     function createCell(value) {
@@ -672,11 +770,50 @@ def create_app(
       return cell;
     }
 
-    function setStatus(message, tone) {
+    function setStatus(message, tone, options) {
       const status = document.getElementById("status");
       if (!status) return;
-      status.className = tone || "";
-      status.textContent = message;
+      const opts = options && typeof options === "object" ? options : {};
+      const links = Array.isArray(opts.links) ? opts.links : [];
+      status.className = tone ? tone : "";
+      status.innerHTML = "";
+      if (message) {
+        const text = document.createElement("span");
+        text.textContent = message;
+        status.appendChild(text);
+      }
+      if (links.length) {
+        const linkGroup = document.createElement("span");
+        linkGroup.className = "status-links";
+        links.forEach((link, index) => {
+          if (!link || typeof link.href !== "string") {
+            return;
+          }
+          const anchor = document.createElement("a");
+          anchor.href = link.href;
+          anchor.target = "_blank";
+          anchor.rel = "noopener";
+          anchor.textContent = link.label || link.href;
+          linkGroup.appendChild(anchor);
+          if (index < links.length - 1) {
+            linkGroup.appendChild(document.createTextNode(" • "));
+          }
+        });
+        if (linkGroup.childNodes.length) {
+          status.appendChild(linkGroup);
+        }
+      }
+      if (opts.trailingLink && typeof opts.trailingLink.href === "string") {
+        const viewAll = document.createElement("a");
+        viewAll.href = opts.trailingLink.href;
+        viewAll.target = "_blank";
+        viewAll.rel = "noopener";
+        viewAll.className = "status-view-all";
+        viewAll.textContent = opts.trailingLink.label || opts.trailingLink.href;
+        status.appendChild(viewAll);
+      }
+      const shouldHide = !message && !links.length && !opts.trailingLink;
+      status.classList.toggle("hidden", shouldHide);
     }
 
     function gatherSelectedCodes() {
@@ -689,6 +826,12 @@ def create_app(
         }
       }
       return codes;
+    }
+
+    function updatePrintButtonState() {
+      const button = document.getElementById("print-btn");
+      if (!button) return;
+      button.disabled = gatherSelectedCodes().length === 0;
     }
 
     async function printLabels() {
@@ -710,12 +853,30 @@ def create_app(
           const message = typeof detail === "string" ? detail : (detail && detail.default_codes) || "Label generation failed.";
           throw new Error(message);
         }
-        const count = payload.meta && typeof payload.meta.count === "number" ? payload.meta.count : codes.length;
-        const generated = payload.links ? Object.keys(payload.links).join(", ") : "";
-        const message = generated
-          ? `Generated ${count} PDF label${count === 1 ? "" : "s"} for ${generated}.`
-          : `Generated ${count} PDF label${count === 1 ? "" : "s"}.`;
-        setStatus(message, "success");
+        if (payload && typeof payload.error === "string") {
+          const code = payload.error;
+          if (code === "odoo_unreachable") {
+            throw new Error("Labels are unavailable right now; try again once Odoo is reachable.");
+          }
+          throw new Error("Label generation failed.");
+        }
+        const generated = Array.isArray(payload.generated) ? payload.generated : [];
+        const count = typeof payload.count === "number" ? payload.count : generated.length || codes.length;
+        const missing = Array.isArray(payload.missing) ? payload.missing : [];
+        const links = generated
+          .filter((entry) => entry && typeof entry.url === "string")
+          .map((entry) => ({
+            href: entry.url,
+            label: entry.code || entry.url
+          }));
+        let message = `Generated ${count} PDF label${count === 1 ? "" : "s"}.`;
+        if (missing.length) {
+          message += ` Missing data for ${missing.join(", ")}.`;
+        }
+        setStatus(message, "success", {
+          links,
+          trailingLink: { href: "/static/labels/", label: "View all labels" }
+        });
       } catch (error) {
         console.error(error);
         setStatus(error instanceof Error ? error.message : "Label generation failed.", "error");
@@ -739,11 +900,17 @@ def create_app(
       loadFlagged();
       loadLastSync();
     });
+    document.getElementById("flagged-tbody")?.addEventListener("change", (event) => {
+      if (event.target && event.target.matches("input[type='checkbox']")) {
+        updatePrintButtonState();
+      }
+    });
     document.getElementById("print-btn")?.addEventListener("click", printLabels);
 
     loadImpact();
     loadFlagged();
     loadLastSync();
+    updatePrintButtonState();
   </script>
 </body>
 </html>
@@ -943,20 +1110,25 @@ def create_app(
         meta["count"] = len(payload)
         return {"items": payload, "meta": meta}
 
-    @app.post("/labels/markdown", response_class=JSONResponse)
-    def markdown_labels(default_codes: object = None) -> dict[str, object]:
-        if default_codes is None:
+    @app.post("/labels/markdown")
+    def markdown_labels(
+        payload: Mapping[str, object] | None = Body(None),
+        combined: bool = Query(False),
+    ):
+        if payload is None:
             raise HTTPException(400, {"default_codes": "provide JSON body with default_codes list"})
-        if not isinstance(default_codes, list):
+        if not isinstance(payload, Mapping):
+            raise HTTPException(400, {"default_codes": "expected JSON object with default_codes list"})
+        raw_codes = payload.get("default_codes")
+        if not isinstance(raw_codes, list):
             raise HTTPException(400, {"default_codes": "expected list of product codes"})
+
         codes: list[str] = []
-        for value in default_codes:
+        for value in raw_codes:
             if not isinstance(value, str):
                 raise HTTPException(400, {"default_codes": "all codes must be strings"})
             trimmed = value.strip()
-            if not trimmed:
-                continue
-            if trimmed not in codes:
+            if trimmed and trimmed not in codes:
                 codes.append(trimmed)
         if not codes:
             raise HTTPException(400, {"default_codes": "provide at least one product code"})
@@ -965,45 +1137,106 @@ def create_app(
         if client is None:
             app_logger.error("Cannot generate labels: Odoo client unavailable")
             return {
-                "labels": [],
-                "links": {},
-                "meta": {
-                    "error": "odoo_unreachable",
-                    "requested": codes,
-                },
+                "generated": [],
+                "count": 0,
+                "error": "odoo_unreachable",
+                "requested": codes,
             }
 
-        output_dir = labels_provider()
+        output_dir = _resolve_repo_path(labels_provider())
         generator = MarkdownLabelGenerator(client, output_dir=output_dir)
         try:
             documents = generator.generate(codes)
         except Exception:
             app_logger.exception("Failed to generate label PDFs")
             return {
-                "labels": [],
-                "links": {},
-                "meta": {
-                    "error": "label_generation_failed",
-                    "requested": codes,
-                },
+                "generated": [],
+                "count": 0,
+                "error": "label_generation_failed",
+                "requested": codes,
             }
 
-        links = {doc.default_code: str(doc.pdf_path) for doc in documents}
-        generated_at = (
-            documents[0].generated_at.isoformat() if documents else datetime.now(timezone.utc).isoformat()
-        )
-        meta: dict[str, object] = {
-            "requested": codes,
+        if combined:
+            labels_root = output_dir.resolve()
+            cache_key = "|".join(codes)
+            cache_hash = hashlib.sha1(cache_key.encode("utf-8")).hexdigest()[:12]
+            combined_filename = f"labels-combined-{len(codes)}-{cache_hash}.pdf"
+            combined_path = labels_root / combined_filename
+            if not combined_path.exists():
+                try:
+                    combined_payload = generator.render_combined_pdf(documents)
+                    combined_path.write_bytes(combined_payload)
+                except Exception:
+                    app_logger.exception("Failed to build combined label PDF")
+                    raise HTTPException(500, {"detail": "combined_pdf_failed"}) from None
+                _refresh_labels_static_index(output_dir)
+            try:
+                response = FileResponse(combined_path, media_type="application/pdf")
+            except Exception:
+                app_logger.exception("Failed to stream combined label PDF")
+                raise HTTPException(500, {"detail": "combined_pdf_failed"}) from None
+            response.headers["Content-Disposition"] = f'inline; filename="{combined_path.name}"'
+            return response
+
+        labels_root = output_dir.resolve()
+        generated_items: list[dict[str, object]] = []
+        for doc in documents:
+            url = _static_label_url(Path(doc.pdf_path), labels_root=labels_root)
+            entry: dict[str, object] = {
+                "code": doc.default_code,
+                "path": str(doc.pdf_path),
+                "url": url,
+            }
+            if not doc.found:
+                entry["found"] = False
+            generated_items.append(entry)
+
+        missing = [doc.default_code for doc in documents if not doc.found]
+        result: dict[str, object] = {
+            "generated": generated_items,
             "count": len(documents),
-            "missing": [doc.default_code for doc in documents if not doc.found],
-            "generated_at": generated_at,
-            "output_dir": str(output_dir),
+            "requested": codes,
         }
-        return {
-            "labels": [doc.to_dict() for doc in documents],
-            "links": links,
-            "meta": meta,
-        }
+        if missing:
+            result["missing"] = missing
+        _refresh_labels_static_index(output_dir)
+        return result
+
+    @app.get("/static/labels/", include_in_schema=False)
+    def static_labels_root() -> Response:
+        labels_root = _labels_root()
+        index_path = labels_root / "index.html"
+        if index_path.exists():
+            try:
+                content = index_path.read_text(encoding="utf-8")
+            except OSError:
+                raise HTTPException(500, {"detail": "labels_index_unreadable"}) from None
+            return HTMLResponse(content)
+        raise HTTPException(404, {"detail": "Not found"})
+
+    @app.get("/static/labels/{requested_path:path}", include_in_schema=False)
+    def static_label_asset(requested_path: str) -> Response:
+        labels_root = _labels_root()
+        target = (labels_root / requested_path).resolve()
+        try:
+            target.relative_to(labels_root)
+        except ValueError:
+            raise HTTPException(404, {"detail": "Not found"})
+        if target.is_dir():
+            index_path = target / "index.html"
+            if index_path.exists():
+                try:
+                    content = index_path.read_text(encoding="utf-8")
+                except OSError:
+                    raise HTTPException(500, {"detail": "labels_index_unreadable"}) from None
+                return HTMLResponse(content)
+            raise HTTPException(404, {"detail": "Not found"})
+        if not target.exists():
+            raise HTTPException(404, {"detail": "Not found"})
+        media_type = "application/pdf" if target.suffix.lower() == ".pdf" else "application/octet-stream"
+        response = FileResponse(target, media_type=media_type)
+        response.headers["Content-Disposition"] = f"inline; filename=\"{target.name}\""
+        return response
 
     @app.get("/out/labels", response_class=JSONResponse)
     def labels_index_no_slash() -> dict[str, object]:
@@ -1228,8 +1461,15 @@ def _default_repository_factory() -> InventoryRepository | None:
         return None
 
 
+def _resolve_repo_path(path: Path | str) -> Path:
+    path_obj = path if isinstance(path, Path) else Path(path)
+    if path_obj.is_absolute():
+        return path_obj
+    return (REPO_ROOT / path_obj).resolve()
+
+
 def _default_labels_path() -> Path:
-    return Path("out/labels")
+    return REPO_ROOT / "out" / "labels"
 
 
 def _default_flagged_path() -> Path:
@@ -1239,27 +1479,30 @@ def _default_flagged_path() -> Path:
 
 
 def _labels_directory_listing(directory: Path) -> dict[str, object]:
-    if not directory.exists():
+    labels_root = _resolve_repo_path(directory).resolve()
+    if not labels_root.exists():
         return {
             "labels": [],
             "meta": {
                 "exists": False,
                 "count": 0,
-                "output_dir": str(directory),
+                "output_dir": str(labels_root),
             },
         }
     items: list[dict[str, object]] = []
-    for pdf_path in sorted(directory.glob("*.pdf")):
+    for pdf_path in sorted(labels_root.glob("*.pdf")):
         try:
             stat = pdf_path.stat()
         except OSError:
             continue
+        url_value = "/static/labels/" + pdf_path.relative_to(labels_root).as_posix()
         items.append(
             {
                 "filename": pdf_path.name,
                 "path": str(pdf_path),
                 "size": stat.st_size,
                 "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+                "url": url_value,
             }
         )
     return {
@@ -1267,7 +1510,7 @@ def _labels_directory_listing(directory: Path) -> dict[str, object]:
         "meta": {
             "exists": True,
             "count": len(items),
-            "output_dir": str(directory),
+            "output_dir": str(labels_root),
         },
     }
 

@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import html
+import io
 import re
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
@@ -46,6 +47,36 @@ DEFAULT_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
+COMBINED_TEMPLATE = """<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {{ font-family: Helvetica, Arial, sans-serif; padding: 24px; }}
+      .labels-collection {{ display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }}
+      .label {{
+        border: 1px solid #222;
+        border-radius: 8px;
+        padding: 16px 20px;
+        margin: 0;
+        max-width: 320px;
+        page-break-inside: avoid;
+      }}
+      .title {{ font-size: 20px; font-weight: 600; margin: 0 0 8px 0; }}
+      .sku {{ font-size: 14px; color: #333; margin-bottom: 6px; }}
+      .meta {{ font-size: 12px; color: #444; margin-bottom: 4px; }}
+      .description {{ font-size: 12px; color: #222; margin-top: 12px; line-height: 1.4; }}
+      .barcode {{ font-size: 12px; color: #555; margin-bottom: 4px; }}
+    </style>
+  </head>
+  <body>
+    <div class="labels-collection">
+      {labels}
+    </div>
+  </body>
+</html>
+"""
+
 
 @dataclass
 class LabelDocument:
@@ -59,6 +90,7 @@ class LabelDocument:
     pdf_path: Path
     generated_at: datetime
     found: bool
+    html_content: Optional[str] = field(default=None, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -113,9 +145,21 @@ class MarkdownLabelGenerator:
                     pdf_path=target_path,
                     generated_at=generated_at,
                     found=product is not None,
+                    html_content=html_payload,
                 )
             )
         return documents
+
+    def render_combined_pdf(self, documents: Sequence[LabelDocument]) -> bytes:
+        fragments: List[str] = []
+        for doc in documents:
+            fragment = _extract_label_fragment(doc.html_content)
+            if fragment:
+                fragments.append(fragment)
+        if not fragments:
+            raise ValueError("no label content to combine")
+        combined_html = _build_combined_html(fragments)
+        return self.renderer.render_bytes(combined_html)
 
     def _fetch_products(self, default_codes: Iterable[str]) -> Dict[str, Mapping[str, Any]]:
         codes = list(default_codes)
@@ -183,6 +227,23 @@ class MarkdownLabelGenerator:
         return self.template.format(**escaped_context)
 
 
+_BODY_FRAGMENT_RE = re.compile(r"<body[^>]*>(?P<body>.*)</body>", re.IGNORECASE | re.DOTALL)
+
+
+def _extract_label_fragment(html_content: Optional[str]) -> str:
+    if not html_content:
+        return ""
+    match = _BODY_FRAGMENT_RE.search(html_content)
+    if match:
+        return match.group("body").strip()
+    return html_content.strip()
+
+
+def _build_combined_html(fragments: Sequence[str]) -> str:
+    labels_markup = "\n".join(fragment for fragment in fragments if fragment)
+    return COMBINED_TEMPLATE.format(labels=labels_markup)
+
+
 class PDFRenderer:
     """PDF writer with WeasyPrint support and pure-Python fallback."""
 
@@ -205,6 +266,14 @@ class PDFRenderer:
             return
         text_content = _strip_html(html_content)
         _write_basic_pdf(text_content, output_path)
+
+    def render_bytes(self, html_content: str) -> bytes:
+        if self._html_cls is not None:  # pragma: no cover - requires optional dep
+            buffer = io.BytesIO()
+            self._html_cls(string=html_content).write_pdf(target=buffer)
+            return buffer.getvalue()
+        text_content = _strip_html(html_content)
+        return _build_basic_pdf_bytes(text_content)
 
 
 # Helper utilities -----------------------------------------------------------------
@@ -256,6 +325,10 @@ def _strip_html(value: str) -> str:
 
 
 def _write_basic_pdf(text: str, output_path: Path) -> None:
+    output_path.write_bytes(_build_basic_pdf_bytes(text))
+
+
+def _build_basic_pdf_bytes(text: str) -> bytes:
     escaped_lines = [_escape_pdf_text(line) for line in text.splitlines() if line.strip()]
     if not escaped_lines:
         escaped_lines = [_escape_pdf_text(" ")]
@@ -295,15 +368,16 @@ def _write_basic_pdf(text: str, output_path: Path) -> None:
     for offset in offsets[1:]:
         pdf.extend(f"{offset:010d} 00000 n \n".encode("latin-1"))
     pdf.extend(f"trailer<< /Size {count} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n".encode("latin-1"))
-    output_path.write_bytes(pdf)
+    return bytes(pdf)
 
 
 def _escape_pdf_text(text: str) -> str:
-    return (
+    escaped = (
         text.replace("\\", "\\\\")
         .replace("(", "\\(")
         .replace(")", "\\)")
     )
+    return escaped.replace("\r", "").replace("\n", "\\n")
 
 
 __all__ = ["MarkdownLabelGenerator", "LabelDocument", "PDFRenderer"]

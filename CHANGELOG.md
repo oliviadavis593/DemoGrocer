@@ -3,15 +3,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+
 ## [0.3.0] - 2025-10-10
 ### Added
 - `/flagged` JSON endpoint and `/dashboard/flagged` dashboard for reviewing flagged decisions with filter controls and one-click label generation.
 - `/metrics/impact` API plus dashboard overview cards summarising waste diverted (USD) and donated weight derived from decision outcomes, including documentation and tests.
 - Persistent tracking of the last integration sync with a `/metrics/last_sync` endpoint and dashboard banner that highlights when data is more than 30 minutes old.
 - CSV exports for flagged decisions and inventory events (`/export/flagged.csv`, `/export/events.csv`) including optional API key protection, documentation updates, and automated tests validating headers.
+- Inventory fixture helpers (`services/integration/fixtures.py`) that provide stock quantities, shelf-life metadata, and supplier assignments for use in demos and offline simulations.
+- Deterministic fake movement generator (`services/integration/movements.py`) that produces repeatable sale, expiry, and clearance events for perishable and low-demand items.
 
 ### Changed
 - `/flagged` responses (scheduler API, reporting API, and CSV export) now enrich each decision with live `product_name`, `category`, store names, and on-hand `qty` sourced from Odoo stock while excluding configurable quarantine locations for faster dashboard reviews.
+- `/labels/markdown` now returns JSON summaries for each generated PDF (`generated[].url`), persists files under `out/labels/<CODE>.pdf`, caches combined PDF requests based on the requested codes, and serves them via `/static/labels/` alongside a refreshed dashboard toast linking to each label.
 
 
 ## [0.2.1] - 2025-10-09

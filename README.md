@@ -73,6 +73,31 @@ make seed-staff
 
 The script creates cashier, department manager, and store manager accounts, assigns the appropriate Odoo groups via XML IDs, and writes passwords to `.out/staff_credentials.json`. Subsequent runs preserve existing passwords while updating group assignments as needed.
 
+### Demo fixtures & synthetic movements
+
+When running FoodFlow without a live Odoo instance you can rely on the new demo helpers to keep tutorials and prototypes grounded in realistic data.
+
+```python
+from datetime import date
+from services.integration import (
+    fixtures_as_dicts,
+    fixtures_to_snapshot,
+    generate_fake_movements,
+    load_inventory_fixtures,
+    movements_as_dicts,
+)
+
+fixtures = load_inventory_fixtures(base_date=date(2025, 1, 1))
+snapshot = fixtures_to_snapshot(fixtures)
+movement_events = generate_fake_movements(fixtures, days=7, start_date=date(2024, 12, 25))
+
+# Persist or inspect structured payloads
+inventory_payload = fixtures_as_dicts(fixtures)
+movement_payload = movements_as_dicts(movement_events)
+```
+
+The fixture loader enriches every catalog item with backroom and sales-floor stock quantities, supplier assignments, and shelf-life metadata derived from per-category perishability windows. The movement generator emits deterministic sale, expiry, markdown, and receiving events for perishable and low-demand products so dashboards and exports remain populated even in offline demos.
+
 ### Quick Make Targets
 
 Common workflows are available as single-command Make targets:
@@ -242,11 +267,18 @@ curl -s "http://localhost:8000/export/events.csv?type=receiving&since=7d" | head
 curl -s -X POST "http://localhost:8000/labels/markdown" \
   -H "Content-Type: application/json" \
   -d '{"default_codes":["FF101","FF102"]}'
-# {"labels":[{"default_code":"FF101","path":"out/labels/FF101.pdf",...}],
-#  "meta":{"count":2,"output_dir":"out/labels"}}
+# {"generated":[{"code":"FF101","path":"out/labels/FF101.pdf","url":"/static/labels/FF101.pdf"},...],
+#  "count":2,"requested":["FF101","FF102"]}
+
+# Append `?combined=true` to cache and reuse a single PDF containing all labels:
+# curl -s -X POST "http://localhost:8000/labels/markdown?combined=true" \
+#   -H "Content-Type: application/json" \
+#   -d '{"default_codes":["FF101","FF102"]}' > combined.pdf
+# Subsequent requests with the same codes reuse the cached file saved under `out/labels/labels-combined-<hash>.pdf` and exposed at `/static/labels/`.
 
 curl -s "http://localhost:8000/out/labels/"
-# {"labels":[{"filename":"FF101.pdf","path":"out/labels/FF101.pdf",...}], "meta":{"count":2,"exists":true}}
+# {"labels":[{"filename":"FF101.pdf","path":"out/labels/FF101.pdf","url":"/static/labels/FF101.pdf",...},...],
+#  "meta":{"count":2,"exists":true}}
 
 curl -s -X POST "http://localhost:8000/recall/trigger" \
   -H "Content-Type: application/json" \

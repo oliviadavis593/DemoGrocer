@@ -47,7 +47,7 @@ This guide walks through the repository layout so new contributors can quickly l
   - `events.py` – JSONL writer, historical helpers (for returns accounting), and the database bridge for simulator events.
   - `inventory.py` – Odoo inventory repository for loading and mutating stock quants.
   - `state.py` & `scheduler.py` – Track job execution intervals and schedule recurring runs.
-- `services/integration/` – Shared integration runner wiring that authenticates with Odoo once, exposes an inventory repository, and offers a CLI for sync cycles.
+- `services/integration/` – Shared integration runner wiring that authenticates with Odoo once, exposes an inventory repository, offers a CLI for sync cycles, and now ships `fixtures.py`/`movements.py` helpers for offline stock snapshots and synthetic movement timelines.
 - `services/analysis/` – Post-processing helpers such as `shrink_triggers.py`, which emits `flag_low_movement` and `flag_overstock` events based on recent sales velocity.
 - `services/recall/` – Recall orchestration utilities shared by the CLI and API routes for quarantining stock.
 - `services/docs/labels.py` – Markdown-based PDF label renderer with optional WeasyPrint integration and pure-Python fallback.
@@ -88,7 +88,7 @@ The FastAPI service in `apps/web` exposes the following JSON endpoints:
 | `/at-risk` | GET | Surfaces lots that are approaching expiry so operators know which products need action inside Odoo. |
 | `/flagged` | GET | Returns enriched decision payloads (with `product_name`, `category`, store list, and `qty`) derived from `out/flagged.json`, supporting optional `store`, `category`, and `reason` filters. |
 | `/dashboard/flagged` | GET | Serves an HTML dashboard that fetches `/flagged`, applies client-side filters, and triggers label generation via `/labels/markdown`. |
-| `/labels/markdown` | POST | Generates printable PDF labels for provided `default_codes`, useful for spot-checking or demo scenarios. |
+| `/labels/markdown` | POST | Generates printable PDF labels for provided `default_codes`, saving them to `out/labels/` and returning JSON with static URLs. Append `?combined=true` to reuse a cached combined PDF written to `out/labels/labels-combined-<hash>.pdf` and published under `/static/labels/`. |
 | `/out/labels/` | GET | Lists generated label PDFs so you can quickly download or inspect the latest artifacts under `out/labels`. |
 | `/export/flagged.csv` | GET | Streams a CSV with `default_code, product, lot, reason, outcome, suggested_qty, quantity, unit, price_markdown_pct, store, stores, category, notes` using the enriched `/flagged` data; accepts the same filters and requires an `api_key` query parameter when `FOODFLOW_WEB_API_KEY` (or `FOODFLOW_API_KEY`) is set. |
 | `/export/events.csv` | GET | Exports CSV-formatted inventory events (`timestamp, type, product, lot, quantity, before_quantity, after_quantity, source`) while respecting the `limit`, `type`, and `since` filters and the optional API key guard. |
