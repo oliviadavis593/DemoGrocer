@@ -8,8 +8,8 @@ from pathlib import Path
 
 from packages.odoo_client import OdooClientError
 
-from .config import DEFAULT_CONFIG_PATH, IntegrationConfig, load_config
-from .odoo_service import OdooService
+from services.integration.config import DEFAULT_CONFIG_PATH, IntegrationConfig, load_config
+from services.integration.odoo_service import OdooService
 
 
 def _configure_logging(level_name: str) -> None:
@@ -27,17 +27,26 @@ def _load_config(path: Path) -> IntegrationConfig:
         return IntegrationConfig()
 
 
+def _resolve_summary_limit(args: argparse.Namespace, config: IntegrationConfig) -> int:
+    summary_limit = config.inventory.summary_limit
+    if getattr(args, "summary_limit", None) is not None:
+        summary_limit = max(0, args.summary_limit)
+    return summary_limit
+
+
+def _build_service(config: IntegrationConfig, logger: logging.Logger) -> OdooService:
+    return OdooService(lot_expiry_field=config.inventory.lot_expiry_field, logger=logger)
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     config_path = Path(args.config) if args.config else DEFAULT_CONFIG_PATH
     config = _load_config(config_path)
-    summary_limit = config.inventory.summary_limit
-    if args.summary_limit is not None:
-        summary_limit = max(0, args.summary_limit)
+    summary_limit = _resolve_summary_limit(args, config)
 
     _configure_logging(config.log_level)
     logger = logging.getLogger("foodflow.integration.runner")
 
-    service = OdooService(lot_expiry_field=config.inventory.lot_expiry_field)
+    service = _build_service(config, logger.getChild("service"))
     try:
         result = service.sync(summary_limit=summary_limit)
     except OdooClientError:
@@ -51,9 +60,44 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_snapshot(args: argparse.Namespace) -> int:
+    config_path = Path(args.config) if args.config else DEFAULT_CONFIG_PATH
+    config = _load_config(config_path)
+    summary_limit = _resolve_summary_limit(args, config)
+
+    _configure_logging(config.log_level)
+    logger = logging.getLogger("foodflow.integration.runner")
+
+    service = _build_service(config, logger.getChild("service"))
+    try:
+        rows = service.fetch_inventory_snapshot()
+    except OdooClientError:
+        logger.exception("Integration snapshot failed due to Odoo authentication error")
+        return 1
+    except Exception:
+        logger.exception("Integration snapshot failed with an unexpected error")
+        return 1
+
+    total = len(rows)
+    print(f"Inventory rows: {total}")
+    sample = rows[:summary_limit] if summary_limit else []
+    for row in sample:
+        product = str(row.get("product") or "")
+        lot = row.get("lot") or "-"
+        quantity = row.get("quantity")
+        try:
+            quantity_display = f"{float(quantity):.2f}"
+        except (TypeError, ValueError):
+            quantity_display = str(quantity)
+        locations = ", ".join(row.get("locations") or []) or "-"
+        life_date = row.get("life_date") or "-"
+        print(f"- {product} lot={lot} qty={quantity_display} locations={locations} expiry={life_date}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="FoodFlow integration service runner")
-    parser.add_argument("command", choices=["sync"], help="Command to execute")
+    parser.add_argument("command", choices=["sync", "snapshot"], help="Command to execute")
     parser.add_argument(
         "-c",
         "--config",
@@ -69,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "sync":
         return cmd_sync(args)
+    if args.command == "snapshot":
+        return cmd_snapshot(args)
     parser.error(f"Unknown command {args.command}")
     return 1
 

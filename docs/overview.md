@@ -40,6 +40,7 @@ FoodFlow bundles the tooling needed to demonstrate a realistic grocery retail op
 | `make simulate` | Runs one simulator cycle and records events. |
 | `make simulate-start` | Starts the scheduler for continuous simulation (Ctrl+C to stop). |
 | `make integration-sync` | Executes the integration service runner to log a snapshot of inventory quants. |
+| `PYTHONPATH=. python3 services/integration/runner.py snapshot --summary-limit 5` | Prints the current inventory count and a few representative rows (product, lot, quantity, locations, expiry). |
 | `make web` | Serves the FastAPI reporting layer on port 8000. |
 | `make labels-demo` | Generates sample PDF labels for demo SKUs in `out/labels`. |
 

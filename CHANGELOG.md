@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file.
 
 
+## [0.2.1] - 2025-10-09
+### Added
+- High-level inventory helpers on the integration service (`fetch_inventory_snapshot`, `fetch_sales`) that aggregate lot/expiry/location data and compute sales velocity from the event store with Odoo fallback.
+- `snapshot` subcommand for the integration runner (`PYTHONPATH=. python3 services/integration/runner.py snapshot`) that authenticates, fetches inventory, and prints a summary without executing a full sync cycle.
+- Documentation refresh covering the snapshot command in both `README.md` and `docs/overview.md`, ensuring the new workflow is visible alongside existing Make targets.
+- Additional integration service unit tests verifying snapshot aggregation, sales velocity sourcing, and location grouping behaviour.
+
 ## [0.2.0] - 2025-10-09
 ### Added
 - Staff seeding script and `make seed-staff` target for provisioning demo cashier, department manager, and store manager accounts with credentials exported to `.out/staff_credentials.json`.

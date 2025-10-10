@@ -115,6 +115,7 @@ Each command maps to a common developer workflow:
 - `make simulate` runs one simulator cycle, appending sell-down, returns, shrink, expiry, receiving, and analysis flag events to `out/events.jsonl` while persisting everything to `out/foodflow.db`.
 - `make simulate-start` launches the background scheduler for continuous simulation until you stop it.
 - `make integration-sync` authenticates with Odoo using the new integration service and logs a summary of on-hand inventory fetched during the cycle.
+- `PYTHONPATH=. python3 services/integration/runner.py snapshot --summary-limit 5` prints the current inventory count plus a few representative rows (product, lot, quantity, locations, expiry) without running the full sync automation.
 - `make labels-demo` renders sample product labels to PDF under `out/labels`.
 - `make web` starts the FastAPI reporting server so `/health` returns 200 once the app is ready.
 
