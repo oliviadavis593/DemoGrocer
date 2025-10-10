@@ -99,6 +99,12 @@ make simulate-start
 make integration-sync
 # INFO 2024-01-10 12:00:00,000 INFO Integration cycle complete: 42 quants fetched at 2024-01-10T12:00:00+00:00
 
+PYTHONPATH=. python3 services/integration/runner.py detect --days 7
+# [
+#   {"product": "...", "reason": "near_expiry", ...},
+#   {"product": "...", "reason": "low_movement", ...}
+# ]
+
 make labels-demo
 # Generating labels for 2 product codes
 # Output directory: out/labels
@@ -116,6 +122,7 @@ Each command maps to a common developer workflow:
 - `make simulate-start` launches the background scheduler for continuous simulation until you stop it.
 - `make integration-sync` authenticates with Odoo using the new integration service and logs a summary of on-hand inventory fetched during the cycle.
 - `PYTHONPATH=. python3 services/integration/runner.py snapshot --summary-limit 5` prints the current inventory count plus a few representative rows (product, lot, quantity, locations, expiry) without running the full sync automation.
+- `PYTHONPATH=. python3 services/integration/runner.py detect --days 7` runs the shrink detector once, aggregating inventory and sales velocity to emit a JSON list of near-expiry, low-movement, and overstock flags using the provided thresholds.
 - `make labels-demo` renders sample product labels to PDF under `out/labels`.
 - `make web` starts the FastAPI reporting server so `/health` returns 200 once the app is ready.
 

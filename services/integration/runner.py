@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -10,6 +11,7 @@ from packages.odoo_client import OdooClientError
 
 from services.integration.config import DEFAULT_CONFIG_PATH, IntegrationConfig, load_config
 from services.integration.odoo_service import OdooService
+from services.integration.shrink_detector import detect_flags
 
 
 def _configure_logging(level_name: str) -> None:
@@ -95,9 +97,37 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_detect(args: argparse.Namespace) -> int:
+    config_path = Path(args.config) if args.config else DEFAULT_CONFIG_PATH
+    config = _load_config(config_path)
+
+    _configure_logging(config.log_level)
+    logger = logging.getLogger("foodflow.integration.runner")
+
+    service = _build_service(config, logger.getChild("service"))
+    try:
+        flags = detect_flags(
+            service,
+            near_expiry_days=args.days,
+            low_movement_window_days=args.movement_window,
+            low_movement_min_units=args.min_units,
+            overstock_window_days=args.overstock_window,
+            overstock_target_days=args.target_days,
+        )
+    except OdooClientError:
+        logger.exception("Integration detect failed due to Odoo authentication error")
+        return 1
+    except Exception:
+        logger.exception("Integration detect failed with an unexpected error")
+        return 1
+
+    print(json.dumps(flags, indent=2, sort_keys=True))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="FoodFlow integration service runner")
-    parser.add_argument("command", choices=["sync", "snapshot"], help="Command to execute")
+    parser.add_argument("command", choices=["sync", "snapshot", "detect"], help="Command to execute")
     parser.add_argument(
         "-c",
         "--config",
@@ -109,12 +139,44 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         help="Override number of inventory quants to include in sync log sample",
     )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=7,
+        help="Near-expiry threshold in days for the detect command (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--movement-window",
+        type=int,
+        default=7,
+        help="Sales history window (days) for low-movement detection (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--min-units",
+        type=float,
+        default=12.0,
+        help="Minimum units sold within the movement window before flagging low movement (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--overstock-window",
+        type=int,
+        default=7,
+        help="Sales history window (days) for overstock detection (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--target-days",
+        type=float,
+        default=21.0,
+        help="Target days of supply threshold for overstock detection (default: %(default)s)",
+    )
     args = parser.parse_args(argv)
 
     if args.command == "sync":
         return cmd_sync(args)
     if args.command == "snapshot":
         return cmd_snapshot(args)
+    if args.command == "detect":
+        return cmd_detect(args)
     parser.error(f"Unknown command {args.command}")
     return 1
 

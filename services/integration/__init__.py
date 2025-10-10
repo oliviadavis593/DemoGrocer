@@ -7,6 +7,7 @@ from .config import (
     load_config,
 )
 from .odoo_service import IntegrationCycleResult, OdooService
+from .shrink_detector import detect_flags, flag_low_movement, flag_near_expiry, flag_overstock
 
 __all__ = [
     "DEFAULT_CONFIG_PATH",
@@ -14,5 +15,9 @@ __all__ = [
     "IntegrationInventoryConfig",
     "IntegrationCycleResult",
     "OdooService",
+    "detect_flags",
+    "flag_low_movement",
+    "flag_near_expiry",
+    "flag_overstock",
     "load_config",
 ]

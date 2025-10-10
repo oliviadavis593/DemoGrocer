@@ -27,9 +27,10 @@ FoodFlow bundles the tooling needed to demonstrate a realistic grocery retail op
    - `tail -n 50 out/events.jsonl | grep -E '"type":"(returns|shrink|flag_low_movement|flag_overstock)"' | head`
    - `curl -s "http://localhost:8000/events?type=flag_low_movement&since=7d" | head`
 5. Run `make integration-sync` to exercise the integration runner and capture a sample of live inventory quants in the logs (helpful for automation smoke tests).
-6. Launch `make web`, then browse `http://localhost:8000/` for links to health checks, events, metrics, at-risk products, and label endpoints.
-7. Use `PYTHONPATH=. python3 scripts/recall.py --codes FF101` to quarantine recalled SKUs and confirm the results with `curl -s "http://localhost:8000/recall/quarantined" | head`.
-8. Enable the scheduled GitHub Action (`.github/workflows/integration-sync.yml`) so the integration sync runs daily and notifies you if Odoo authentication or queries start failing.
+6. Inspect shrink risks with `PYTHONPATH=. python3 services/integration/runner.py detect --days 7`, which aggregates inventory, sales velocity, and expiry dates to emit a JSON summary of near-expiry, low-movement, and overstock items.
+7. Launch `make web`, then browse `http://localhost:8000/` for links to health checks, events, metrics, at-risk products, and label endpoints.
+8. Use `PYTHONPATH=. python3 scripts/recall.py --codes FF101` to quarantine recalled SKUs and confirm the results with `curl -s "http://localhost:8000/recall/quarantined" | head`.
+9. Enable the scheduled GitHub Action (`.github/workflows/integration-sync.yml`) so the integration sync runs daily and notifies you if Odoo authentication or queries start failing.
 
 ## Key Make Targets
 
@@ -41,6 +42,7 @@ FoodFlow bundles the tooling needed to demonstrate a realistic grocery retail op
 | `make simulate-start` | Starts the scheduler for continuous simulation (Ctrl+C to stop). |
 | `make integration-sync` | Executes the integration service runner to log a snapshot of inventory quants. |
 | `PYTHONPATH=. python3 services/integration/runner.py snapshot --summary-limit 5` | Prints the current inventory count and a few representative rows (product, lot, quantity, locations, expiry). |
+| `PYTHONPATH=. python3 services/integration/runner.py detect --days 7` | Computes shrink flags (near expiry, low movement, overstock) and prints a JSON array with supporting metrics. |
 | `make web` | Serves the FastAPI reporting layer on port 8000. |
 | `make labels-demo` | Generates sample PDF labels for demo SKUs in `out/labels`. |
 
