@@ -112,6 +112,7 @@ def test_create_app_returns_flagged_payload(tmp_path) -> None:
     assert entry["stores"] == []
     assert entry["store"] == "Unassigned"
     assert entry["qty"] == 0.0
+    assert entry["estimated_weight_lbs"] == 0.0
 
 
 def test_create_app_never_raises_from_store_errors() -> None:

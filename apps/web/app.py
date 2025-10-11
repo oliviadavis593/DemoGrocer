@@ -48,6 +48,7 @@ from .data import (
     calculate_impact_metrics,
     load_flagged_decisions,
     load_recent_events,
+    append_weight_metadata,
     serialize_at_risk,
     serialize_events,
     serialize_inventory_events,
@@ -71,6 +72,7 @@ FLAGGED_CSV_HEADERS: tuple[str, ...] = (
     "suggested_qty",
     "quantity",
     "unit",
+    "estimated_weight_lbs",
     "price_markdown_pct",
     "store",
     "stores",
@@ -314,6 +316,8 @@ def create_app(
         except Exception:
             app_logger.exception("Failed to enrich flagged decisions for /flagged endpoint")
 
+        append_weight_metadata(records)
+
         stores_set: set[str] = set()
         categories_set: set[str] = set()
         reasons_set: set[str] = set()
@@ -368,6 +372,13 @@ def create_app(
 
         meta["total"] = len(records)
         meta["count"] = len(filtered)
+        meta["estimated_weight_lbs"] = round(
+            sum(
+                float(entry.get("estimated_weight_lbs") or 0.0)
+                for entry in filtered
+            ),
+            2,
+        )
         meta["filters"] = {
             "stores": sorted(stores_set),
             "categories": sorted(categories_set),
@@ -498,6 +509,11 @@ def create_app(
       <p class="metric-caption">Estimated retail value preserved via markdowns</p>
     </article>
     <article class="card">
+      <h2>Estimated Weight</h2>
+      <p class="metric" id="impact-weight">0 lbs</p>
+      <p class="metric-caption">Pounds represented by current filters</p>
+    </article>
+    <article class="card">
       <h2>Donations</h2>
       <p class="metric" id="impact-donated">0 lbs</p>
       <p class="metric-caption">Estimated pounds redirected through donations</p>
@@ -536,12 +552,13 @@ def create_app(
           <th scope="col">Store(s)</th>
           <th scope="col">Category</th>
           <th scope="col">Qty</th>
+          <th scope="col">Weight (lbs)</th>
           <th scope="col">Outcome</th>
           <th scope="col">Notes</th>
         </tr>
       </thead>
       <tbody id="flagged-tbody">
-        <tr><td colspan="9">Loading flagged items…</td></tr>
+        <tr><td colspan="10">Loading flagged items…</td></tr>
       </tbody>
     </table>
   </section>
@@ -629,11 +646,14 @@ def create_app(
         }
         const payload = await response.json();
         state.data = Array.isArray(payload.items) ? payload.items : [];
-        state.meta = payload.meta || {};
+        state.meta = payload.meta && typeof payload.meta === "object" ? payload.meta : {};
         populateFilters(state.meta.filters || {});
         renderTable();
         const count = state.meta.count ?? state.data.length;
-        setStatus(`Showing ${count} flagged item${count === 1 ? "" : "s"}.`, "success");
+        const weightTotal = Number(state.meta.estimated_weight_lbs || 0);
+        const weightText = weightTotal > 0 ? ` (≈${weightTotal.toFixed(2)} lbs)` : "";
+        setStatus(`Showing ${count} flagged item${count === 1 ? "" : "s"}${weightText}.`, "success");
+        renderImpact();
       } catch (error) {
         console.error(error);
         setStatus("Failed to load flagged decisions. See console for details.", "error");
@@ -662,6 +682,7 @@ def create_app(
 
     function renderImpact() {
       const divertedElement = document.getElementById("impact-diverted");
+      const flaggedWeightElement = document.getElementById("impact-weight");
       const donatedElement = document.getElementById("impact-donated");
       if (divertedElement) {
         const amount = Number(state.impact.diverted_value_usd || 0);
@@ -673,6 +694,10 @@ def create_app(
           maximumFractionDigits: decimals
         });
         divertedElement.textContent = formatter.format(amount);
+      }
+      if (flaggedWeightElement) {
+        const pounds = Number(state.meta && state.meta.estimated_weight_lbs ? state.meta.estimated_weight_lbs : 0);
+        flaggedWeightElement.textContent = `${pounds.toFixed(1)} lbs`;
       }
       if (donatedElement) {
         const pounds = Number(state.impact.donated_weight_lbs || 0);
@@ -711,7 +736,7 @@ def create_app(
       if (!state.data.length) {
         const row = document.createElement("tr");
         const cell = document.createElement("td");
-        cell.colSpan = 9;
+        cell.colSpan = 10;
         cell.textContent = "No flagged decisions match the selected filters.";
         row.appendChild(cell);
         tbody.appendChild(row);
@@ -755,6 +780,15 @@ def create_app(
           qtyCell.textContent = "—";
         }
         row.appendChild(qtyCell);
+
+        const weightCell = document.createElement("td");
+        const weightValue = entry.estimated_weight_lbs;
+        if (weightValue !== undefined && weightValue !== null && !Number.isNaN(Number(weightValue))) {
+          weightCell.textContent = Number(weightValue).toFixed(2);
+        } else {
+          weightCell.textContent = "—";
+        }
+        row.appendChild(weightCell);
 
         row.appendChild(createCell(entry.outcome || "—"));
         row.appendChild(createCell(entry.notes || "—"));
@@ -1265,6 +1299,7 @@ def _serialize_flagged_csv_rows(items: Sequence[Mapping[str, object]]) -> list[d
             "suggested_qty": _stringify(entry.get("suggested_qty")),
             "quantity": _stringify(entry.get("qty") or entry.get("quantity")),
             "unit": _stringify(entry.get("unit") or entry.get("unit_of_measure") or entry.get("uom")),
+            "estimated_weight_lbs": _stringify(entry.get("estimated_weight_lbs")),
             "price_markdown_pct": _stringify(entry.get("price_markdown_pct")),
             "store": _stringify(entry.get("store")),
             "stores": _stringify_sequence(entry.get("stores")),

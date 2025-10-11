@@ -9,7 +9,7 @@ import os
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Mapping, Protocol, Sequence, Tuple
+from typing import Iterable, List, Mapping, MutableMapping, Protocol, Sequence, Tuple
 
 from services.simulator.inventory import InventorySnapshot, QuantRecord
 
@@ -238,12 +238,10 @@ def calculate_impact_metrics(records: Sequence[Mapping[str, object]]) -> dict[st
 
     for record in records:
         outcome = str(record.get("outcome") or "").upper()
-        quantity = _coerce_positive_float(
-            record.get("suggested_qty"), fallback=_coerce_positive_float(record.get("quantity"))
-        )
+        code = str(record.get("default_code") or "").strip()
+        quantity, uom = _resolve_quantity_and_uom(record, code, uoms)
         if quantity is None or quantity <= 0:
             continue
-        code = str(record.get("default_code") or "").strip()
         if outcome == "MARKDOWN":
             price = _resolve_unit_price(record, code, prices)
             if price is None or price <= 0:
@@ -252,7 +250,6 @@ def calculate_impact_metrics(records: Sequence[Mapping[str, object]]) -> dict[st
             diverted_value += quantity * price * factor
             markdown_count += 1
         elif outcome == "DONATE":
-            uom = _resolve_uom(record, code, uoms)
             pounds = _convert_to_pounds(quantity, uom)
             if pounds <= 0:
                 continue
@@ -291,12 +288,25 @@ def _resolve_unit_price(
 
 
 def _resolve_uom(record: Mapping[str, object], code: str, uoms: Mapping[str, str]) -> str | None:
+    if code and code in uoms:
+        return uoms[code]
     raw = record.get("uom") or record.get("unit_of_measure") or record.get("unit")
     if isinstance(raw, str) and raw.strip():
         return raw.strip().upper()
-    if code and code in uoms:
-        return uoms[code]
     return None
+
+
+def _resolve_quantity_and_uom(
+    record: Mapping[str, object], code: str, uoms: Mapping[str, str]
+) -> tuple[float | None, str | None]:
+    quantity = _coerce_positive_float(
+        record.get("suggested_qty"),
+        fallback=_coerce_positive_float(record.get("quantity")),
+    )
+    if quantity is None or quantity <= 0:
+        return None, None
+    uom = _resolve_uom(record, code, uoms)
+    return quantity, uom
 
 
 def _convert_to_pounds(quantity: float, uom: str | None) -> float:
@@ -353,6 +363,22 @@ def _product_lookup() -> tuple[dict[str, float], dict[str, str]]:
     return prices, uoms
 
 
+def append_weight_metadata(records: Iterable[MutableMapping[str, object]]) -> None:
+    """Populate per-record weight metadata for flagged decision payloads."""
+
+    _, uoms = _product_lookup()
+    for record in records:
+        code = str(record.get("default_code") or "").strip()
+        quantity, uom = _resolve_quantity_and_uom(record, code, uoms)
+        if uom:
+            record["unit"] = uom
+            record["unit_of_measure"] = uom
+        if quantity is not None:
+            record["quantity"] = quantity
+        pounds = _convert_to_pounds(quantity or 0.0, uom)
+        record["estimated_weight_lbs"] = round(pounds, 2)
+
+
 __all__ = [
     "AtRiskItem",
     "EventRecord",
@@ -363,5 +389,6 @@ __all__ = [
     "serialize_at_risk",
     "serialize_events",
     "serialize_inventory_events",
+    "append_weight_metadata",
     "snapshot_from_quants",
 ]

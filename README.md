@@ -176,7 +176,7 @@ curl -s "http://localhost:8000/flagged" | jq
 curl -s "http://localhost:8000/flagged?store=Downtown&reason=near_expiry" | jq
 ```
 
-Each `/flagged` response (and the dashboard that consumes it) now includes `product_name`, `category`, an ordered `stores` list, and an on-hand `qty` sourced directly from Odoo stock quants. Quarantine locations are filtered out automatically; add any additional names to the `inventory.quarantine_locations` array in `services/integration/config.yaml` if your instance uses custom isolation areas.
+Each `/flagged` response (and the dashboard that consumes it) now includes `product_name`, `category`, an ordered `stores` list, on-hand `qty`, and an `estimated_weight_lbs` field derived from the product’s unit of measure. The response metadata also surfaces the total pounds represented by the current filters so you can track waste avoided alongside markdown dollars. Quarantine locations are filtered out automatically; add any additional names to the `inventory.quarantine_locations` array in `services/integration/config.yaml` if your instance uses custom isolation areas.
 
 Shrink trigger thresholds live in `config/shrink_triggers.yaml`. Tweak the sales window, minimum units sold, or per-category days-of-supply limits and re-run `make simulate` to observe how many `flag_low_movement` and `flag_overstock` events the detector emits.
 

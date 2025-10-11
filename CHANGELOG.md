@@ -16,6 +16,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - `/flagged` responses (scheduler API, reporting API, and CSV export) now enrich each decision with live `product_name`, `category`, store names, and on-hand `qty` sourced from Odoo stock while excluding configurable quarantine locations for faster dashboard reviews.
 - `/labels/markdown` now returns JSON summaries for each generated PDF (`generated[].url`), persists files under `out/labels/<CODE>.pdf`, caches combined PDF requests based on the requested codes, and serves them via `/static/labels/` alongside a refreshed dashboard toast linking to each label.
+- `/flagged` responses and the dashboard now include per-record `estimated_weight_lbs` alongside aggregated pound totals, helping highlight waste avoidance next to markdown dollars.
 
 
 ## [0.2.1] - 2025-10-09

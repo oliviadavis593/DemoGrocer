@@ -23,6 +23,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency
     uvicorn = None  # type: ignore
 
 from packages.decision.policy import DEFAULT_POLICY_PATH, DecisionMapper
+from apps.web.data import append_weight_metadata
 from services.integration.config import DEFAULT_CONFIG_PATH, IntegrationConfig, load_config
 from services.integration.enricher import enrich_decisions
 from services.integration.odoo_service import OdooService
@@ -217,10 +218,12 @@ def create_app(store: FlaggedStore) -> FastAPI:
             LOGGER.exception("Failed to read flagged decisions")
             return []
         try:
-            return enrich_decisions(current)
+            enriched = enrich_decisions(current)
         except Exception:
             LOGGER.exception("Failed to enrich flagged decisions")
             return current
+        append_weight_metadata(enriched)
+        return enriched
 
     return app
 

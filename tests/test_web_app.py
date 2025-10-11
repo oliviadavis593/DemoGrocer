@@ -559,12 +559,15 @@ def test_flagged_endpoint_applies_filters(tmp_path: Path) -> None:
     payload = response.json()
     assert payload["meta"]["total"] == 2
     assert payload["meta"]["count"] == 1
+    assert payload["meta"]["estimated_weight_lbs"] == 4.5
     assert payload["items"][0]["default_code"] == "FF101"
     assert "Downtown" in payload["meta"]["filters"]["stores"]
     assert "Produce" in payload["meta"]["filters"]["categories"]
     assert payload["meta"]["active_filters"]["store"] == "Downtown"
     assert payload["items"][0]["product_name"] == "Gala Apples"
     assert payload["items"][0]["qty"] == 4.5
+    assert payload["items"][0]["estimated_weight_lbs"] == 4.5
+    assert payload["items"][0]["unit"] == "LB"
 
 
 def test_export_flagged_csv_includes_headers(tmp_path: Path) -> None:
@@ -610,6 +613,7 @@ def test_export_flagged_csv_includes_headers(tmp_path: Path) -> None:
         "suggested_qty",
         "quantity",
         "unit",
+        "estimated_weight_lbs",
         "price_markdown_pct",
         "store",
         "stores",
@@ -624,7 +628,8 @@ def test_export_flagged_csv_includes_headers(tmp_path: Path) -> None:
         "MARKDOWN",
         "12.5",
         "10",
-        "EA",
+        "LB",
+        "12.5",
         "0.15",
         "Downtown",
         "Downtown; Warehouse",
