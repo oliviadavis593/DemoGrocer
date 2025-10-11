@@ -5,16 +5,19 @@ import csv
 import hashlib
 import html
 import io
+import json
 import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Mapping, Optional, Sequence, Tuple
+from typing import Callable, List, Mapping, Optional, Sequence, Tuple
 
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from jsonschema import Draft202012Validator
+from sqlalchemy import select
 
 try:  # pragma: no cover - optional dependency
     from pydantic import BaseModel
@@ -34,9 +37,10 @@ except ModuleNotFoundError:  # pragma: no cover - lightweight fallback
             annotations = getattr(self, "__annotations__", {})
             return {key: getattr(self, key, None) for key in annotations}
 
-from packages.db import EventStore
+from packages.db import ComplianceEvent, EventStore, compliance_session, create_all
 from packages.odoo_client import OdooClient, OdooClientError
 from services.docs import MarkdownLabelGenerator
+from services.compliance import CSV_HEADERS as COMPLIANCE_CSV_HEADERS, resolve_csv_path, serialize_event
 from services.integration.enricher import enrich_decisions
 from services.integration.odoo_service import OdooService
 from services.recall import QuarantinedItem, RecallResult, RecallService
@@ -91,6 +95,13 @@ EVENTS_CSV_HEADERS: tuple[str, ...] = (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+COMPLIANCE_SCHEMA_PATH = REPO_ROOT / "contracts" / "schemas" / "compliance.schema.json"
+try:
+    _COMPLIANCE_SCHEMA = json.loads(COMPLIANCE_SCHEMA_PATH.read_text(encoding="utf-8"))
+    _COMPLIANCE_VALIDATOR = Draft202012Validator(_COMPLIANCE_SCHEMA)
+except Exception:
+    _COMPLIANCE_SCHEMA = None
+    _COMPLIANCE_VALIDATOR = None
 
 
 class RecallTriggerPayload(BaseModel):
@@ -244,6 +255,8 @@ def create_app(
                 "recall_quarantined": "/recall/quarantined",
                 "flagged_export": "/export/flagged.csv",
                 "events_export": "/export/events.csv",
+                "compliance_events": "/compliance/events",
+                "compliance_export": "/compliance/export.csv",
             },
             "docs": "See README.md for curl examples and Make targets.",
         }
@@ -980,6 +993,68 @@ def create_app(
         payload = serialize_inventory_events(records)
         meta["count"] = len(payload)
         return {"events": payload, "meta": meta}
+
+    @app.get("/compliance/events", response_class=JSONResponse)
+    def compliance_events(
+        since: str | None = Query(None),
+        type: str | None = Query(None),
+        code: str | None = Query(None),
+        store: str | None = Query(None),
+        limit: int = Query(100, ge=1, le=500),
+    ) -> List[dict[str, object]]:
+        try:
+            create_all()
+        except Exception:
+            app_logger.exception("Failed to ensure compliance tables exist before querying events")
+            raise HTTPException(500, {"detail": "compliance_setup_failed"}) from None
+
+        try:
+            since_dt = _parse_since(since)
+        except ValueError as exc:
+            raise HTTPException(400, {"since": str(exc)}) from exc
+
+        stmt = select(ComplianceEvent).order_by(ComplianceEvent.timestamp.desc())
+        conditions = []
+        if since_dt:
+            conditions.append(ComplianceEvent.timestamp >= since_dt)
+        if type:
+            conditions.append(ComplianceEvent.event_type == type.lower())
+        if code:
+            conditions.append(ComplianceEvent.product_code == code)
+        if store:
+            conditions.append(ComplianceEvent.store == store)
+        if conditions:
+            stmt = stmt.where(*conditions)
+        stmt = stmt.limit(limit)
+
+        try:
+            with compliance_session() as session:
+                records = session.execute(stmt).scalars().all()
+        except Exception:
+            app_logger.exception("Failed to load compliance events from database")
+            raise HTTPException(500, {"detail": "compliance_query_failed"}) from None
+
+        payload: List[dict[str, object]] = []
+        for record in records:
+            data = serialize_event(record)
+            if _COMPLIANCE_VALIDATOR is not None:
+                _COMPLIANCE_VALIDATOR.validate(data)
+            payload.append(data)
+        return payload
+
+    @app.get("/compliance/export.csv")
+    def export_compliance_csv() -> Response:
+        csv_path = resolve_csv_path(None)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        if csv_path.exists():
+            try:
+                text = csv_path.read_text(encoding="utf-8")
+            except OSError:
+                app_logger.exception("Failed to read compliance export at %s", csv_path)
+            else:
+                return _csv_response(text, filename="compliance_events.csv")
+        empty_text = _render_csv([], COMPLIANCE_CSV_HEADERS)
+        return _csv_response(empty_text, filename="compliance_events.csv")
 
     @app.get("/export/flagged.csv")
     def export_flagged_csv(

@@ -13,6 +13,9 @@ DEFAULT_DB_PATH = Path(os.getenv("FOODFLOW_DB_PATH", "out/foodflow.db"))
 def get_db_path() -> Path:
     """Return the configured database path."""
 
+    env_value = os.getenv("FOODFLOW_DB_PATH")
+    if env_value:
+        return Path(env_value)
     return DEFAULT_DB_PATH
 
 

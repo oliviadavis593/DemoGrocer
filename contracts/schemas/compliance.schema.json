@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foodflow/contracts/schemas/compliance.schema.json",
+  "title": "ComplianceEvent (IRS 170(e)(3) donation/markdown record)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "event_id",
+    "event_type",
+    "timestamp",
+    "product_code",
+    "product_name",
+    "category",
+    "outcome",
+    "store",
+    "quantity_units",
+    "unit_cost",
+    "fair_market_value",
+    "captured_by",
+    "irs_170e3_flags"
+  ],
+  "properties": {
+    "event_id": { "type": "string", "format": "uuid" },
+    "event_type": {
+      "type": "string",
+      "enum": ["donation", "markdown", "recall_quarantine", "divert"]
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "product_code": { "type": "string", "minLength": 1 },
+    "product_name": { "type": "string", "minLength": 1 },
+    "category": { "type": "string", "minLength": 1 },
+    "lot_code": { "type": ["string", "null"] },
+    "life_date": { "type": ["string", "null"], "format": "date-time" },
+    "store": { "type": "string", "minLength": 1 },
+    "location_id": { "type": ["integer", "null"] },
+    "outcome": {
+      "type": "string",
+      "enum": ["MARKDOWN", "DONATE", "DIVERT", "RECALL_QUARANTINE"]
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["near_expiry", "low_movement", "overstock", "recall", "manual", "other"],
+      "default": "other"
+    },
+    "notes": { "type": "string", "maxLength": 2000, "default": "" },
+    "quantity_units": { "type": "number", "minimum": 0 },
+    "uom": { "type": "string", "default": "EA" },
+    "weight_lbs": { "type": ["number", "null"], "minimum": 0 },
+    "unit_cost": { "type": "number", "minimum": 0 },
+    "fair_market_value": { "type": "number", "minimum": 0 },
+    "extended_value": { "type": "number", "minimum": 0 },
+    "captured_by": { "type": "string", "minLength": 1 },
+    "staff_id": { "type": ["string", "null"] },
+    "photo_url": { "type": ["string", "null"], "format": "uri" },
+    "irs_170e3_flags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["qualified_org", "charitable_purpose", "wholesome_food"],
+      "properties": {
+        "qualified_org": { "type": "boolean" },
+        "charitable_purpose": { "type": "boolean" },
+        "wholesome_food": { "type": "boolean" },
+        "no_compensation": { "type": "boolean", "default": true },
+        "proper_handling": { "type": "boolean", "default": true }
+      }
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "decision_id": { "type": ["string", "null"] },
+        "event_ref": { "type": ["string", "null"] },
+        "donee_name": { "type": ["string", "null"] },
+        "donee_ein": { "type": ["string", "null"] },
+        "bol_url": { "type": ["string", "null"], "format": "uri" }
+      }
+    }
+  }
+}

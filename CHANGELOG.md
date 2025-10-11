@@ -3,6 +3,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] - 2025-10-11
+### Added
+- Compliance data model and recorder for IRS 170(e)(3) events, including SQLAlchemy-backed `ComplianceEvent` table, JSON-schema validation (`contracts/schemas/compliance.schema.json`), CSV export mirroring, audit logging, and demo CLI support.
+- `/compliance/events` API endpoint with optional filters and schema validation plus `/compliance/export.csv` streaming of the canonical CSV.
+- `make compliance-migrate` and `make compliance-export` targets for applying migrations and packaging compliance event exports.
+- Test coverage for compliance persistence and HTTP endpoints (`tests/test_compliance_recorder.py`, additional FastAPI assertions).
+
+### Changed
+- README updated with compliance field definitions, source-of-truth mapping, and workflow instructions for recording and exporting events.
+
 
 ## [0.3.0] - 2025-10-10
 ### Added

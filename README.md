@@ -161,6 +161,8 @@ Each command maps to a common developer workflow:
 - `PYTHONPATH=. python3 services/integration/schedule.py once` runs the integration shrink detector a single time, writing the mapped decision payload to `out/flagged.json` so downstream tooling (or `curl http://localhost:8000/flagged`) can inspect the latest output.
 - `PYTHONPATH=. python3 services/integration/schedule.py start --interval 10` launches the background scheduler and lightweight HTTP server that refreshes `out/flagged.json` every N minutes and serves `/flagged` alongside `/health` on port 8000.
 - `make labels-demo` renders sample product labels to PDF under `out/labels`.
+- `make compliance-migrate` ensures the compliance database schema is up to date alongside the simulator tables.
+- `make compliance-export` zips `out/compliance/compliance_events.csv` to `out/compliance/export_<timestamp>.zip` for quick hand-offs.
 - `make web` starts the FastAPI reporting server so `/health` returns 200 once the app is ready.
 - Visit `http://localhost:8000/dashboard/flagged` after `make web` to review flagged decisions with store/category/reason filters and kick off bulk label generation via `/labels/markdown`.
 
@@ -202,6 +204,34 @@ print(calculate_impact_metrics(records))
 Shrink trigger thresholds live in `config/shrink_triggers.yaml`. Tweak the sales window, minimum units sold, or per-category days-of-supply limits and re-run `make simulate` to observe how many `flag_low_movement` and `flag_overstock` events the detector emits.
 
 Decision outcomes, markdown percentages, and donation rules live in `config/decision_policy.yaml`. Adjust the YAML to tune outcomes (e.g. increase markdown percentages for overstock) and re-run `PYTHONPATH=. python3 services/integration/runner.py decisions` to review the updated recommendations.
+
+### Compliance Events (IRS 170(e)(3))
+
+Compliance records live under the canonical schema at `contracts/schemas/compliance.schema.json`. Required fields cover key audit data: `event_id` (UUID), `event_type` (`donation`, `markdown`, `recall_quarantine`, `divert`), `timestamp`, product attributes, store, quantities/costs, `captured_by`, and the `irs_170e3_flags` object (`qualified_org`, `charitable_purpose`, `wholesome_food`). Optional properties capture traceability extras such as lots, life dates, staff IDs, supporting documents, and a flexible `meta` object.
+
+- `product_code` → `product.product.default_code`
+- `product_name` → `product.product.name`
+- `category` → `product.product.categ_id.name`
+- `lot_code` → `stock.lot.name` (if tracked)
+- `life_date` → `stock.lot.life_date`
+- `store` / `location_id` → derived from `stock.quant.location_id`
+- `unit_cost` → `product.template.standard_price`
+- `fair_market_value` → `product.template.list_price` (policy overrides allowed)
+- `captured_by` / `staff_id` → the executing staff account or `STAFF_USER` fallback
+- `irs_170e3_flags` → recorder defaults to `True`; downstream policy checks can override per event
+
+The recorder computes `extended_value = fair_market_value × quantity_units` (rounded to two decimals), validates the payload, persists it via SQLAlchemy, mirrors it to `out/compliance/compliance_events.csv`, and emits a `compliance_<event_type>` audit row into the existing event store referencing the compliance UUID.
+
+Quick start:
+
+```bash
+make compliance-migrate
+PYTHONPATH=. python3 services/compliance/recorder.py --demo
+curl -s "http://localhost:8000/compliance/events?limit=2" | jq
+curl -s "http://localhost:8000/compliance/export.csv" | head
+```
+
+The demo command seeds one donation and one markdown so you can inspect the CSV header (`event_id,…,meta_json`), confirm the schema via `/compliance/events`, or pull a zipped export with `make compliance-export`. Custom integrations can call `services.compliance.record_donation()` / `record_markdown()` directly; both helpers return the persisted ORM instance so callers can link back to audit events.
 
 ### Recalls and Quarantine
 
@@ -252,7 +282,7 @@ Example requests:
 
 ```bash
 curl -s http://localhost:8000/
-# {"app":"FoodFlow reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","metrics_last_sync":"/metrics/last_sync","metrics_impact":"/metrics/impact","at_risk":"/at-risk","flagged":"/flagged","dashboard_flagged":"/dashboard/flagged","labels_markdown":"/labels/markdown","labels_index":"/out/labels/","flagged_export":"/export/flagged.csv","events_export":"/export/events.csv"},"docs":"See README.md for curl examples and Make targets."}
+# {"app":"FoodFlow reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","metrics_last_sync":"/metrics/last_sync","metrics_impact":"/metrics/impact","at_risk":"/at-risk","flagged":"/flagged","dashboard_flagged":"/dashboard/flagged","labels_markdown":"/labels/markdown","labels_index":"/out/labels/","flagged_export":"/export/flagged.csv","events_export":"/export/events.csv","compliance_events":"/compliance/events","compliance_export":"/compliance/export.csv"},"docs":"See README.md for curl examples and Make targets."}
 
 curl -s http://localhost:8000/health
 # {"status":"ok"}

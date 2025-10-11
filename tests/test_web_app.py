@@ -11,6 +11,11 @@ from fastapi.testclient import TestClient
 from apps.web import create_app
 from apps.web.data import calculate_at_risk, load_recent_events, snapshot_from_quants
 from packages.db import EventStore, InventoryEvent
+from services.compliance import (
+    CSV_HEADERS as COMPLIANCE_CSV_HEADERS,
+    to_compliance_event,
+    validate_and_persist,
+)
 from scripts.db_migrate import run as run_migration
 from services.recall import QuarantinedItem, RecallResult
 from services.simulator.inventory import QuantRecord
@@ -863,6 +868,80 @@ def test_export_events_csv_filters_results(tmp_path: Path) -> None:
     assert entry[5] == "10"
     assert entry[6] == "15"
     assert entry[7] == "simulator"
+
+
+def test_compliance_events_endpoint_returns_persisted_events(tmp_path: Path, monkeypatch) -> None:
+    db_path = tmp_path / "foodflow.db"
+    csv_path = tmp_path / "compliance_events.csv"
+    events_path = tmp_path / "events.jsonl"
+    monkeypatch.setenv("FOODFLOW_DB_PATH", str(db_path))
+    monkeypatch.setenv("FOODFLOW_COMPLIANCE_CSV_PATH", str(csv_path))
+
+    decision = {
+        "default_code": "FF200",
+        "reason": "near_expiry",
+        "outcome": "DONATE",
+        "suggested_qty": 6,
+        "notes": "Handle with care",
+    }
+    enrichment = {
+        "product_name": "Rescued Greens",
+        "category": "Produce",
+        "store": "Downtown",
+        "qty": 6,
+        "unit_cost": 1.75,
+        "list_price": 3.0,
+    }
+    staff = {"username": "auditor", "staff_id": "EMP-9"}
+    timestamp = datetime(2024, 1, 12, 10, 30, tzinfo=timezone.utc)
+
+    event_payload = to_compliance_event(decision, enrichment, staff, None, timestamp=timestamp)
+    stored = validate_and_persist(event_payload, db_path=db_path, csv_path=csv_path)
+
+    app = create_app(
+        events_path_provider=lambda: events_path,
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+        event_store_provider=lambda: EventStore(db_path),
+    )
+    client = TestClient(app)
+
+    response = client.get("/compliance/events", params={"type": "donation"})
+    assert response.status_code == 200
+    items = response.json()
+    assert isinstance(items, list)
+    assert len(items) == 1
+    record = items[0]
+    assert record["event_id"] == stored.id
+    assert record["product_code"] == "FF200"
+    assert record["extended_value"] == 18.0
+    assert record["irs_170e3_flags"]["qualified_org"] is True
+
+    with csv_path.open("r", encoding="utf-8") as handle:
+        csv_rows = list(csv.reader(handle))
+    assert csv_rows[0] == list(COMPLIANCE_CSV_HEADERS)
+    assert csv_rows[1][0] == stored.id
+
+    export_response = client.get("/compliance/export.csv")
+    assert export_response.status_code == 200
+    export_text = export_response.text.lstrip("\ufeff")
+    assert stored.id in export_text
+
+
+def test_compliance_export_csv_handles_missing_file(tmp_path: Path, monkeypatch) -> None:
+    csv_path = tmp_path / "compliance_events.csv"
+    monkeypatch.setenv("FOODFLOW_COMPLIANCE_CSV_PATH", str(csv_path))
+
+    app = create_app(
+        repository_factory=lambda: None,
+        odoo_client_provider=lambda: None,
+    )
+    client = TestClient(app)
+
+    response = client.get("/compliance/export.csv")
+    assert response.status_code == 200
+    text = response.text.lstrip("\ufeff")
+    assert text.splitlines()[0] == ",".join(COMPLIANCE_CSV_HEADERS)
 
 
 def test_metrics_summary_reports_counts(tmp_path: Path) -> None:

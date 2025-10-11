@@ -5,7 +5,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from packages.db import db_session, ensure_db_path, get_db_path
+from packages.db import create_all, db_session, ensure_db_path, get_db_path
 
 LOGGER = logging.getLogger("foodflow.migrations")
 
@@ -48,6 +48,11 @@ def run(db_path: Path | None = None) -> Path:
         conn.execute(CREATE_INTEGRATION_RUNS_TABLE)
         conn.execute(CREATE_TS_INDEX)
         conn.execute(CREATE_TYPE_TS_INDEX)
+    try:
+        create_all(target_path)
+    except Exception:
+        LOGGER.exception("Failed to create ORM-managed tables via SQLAlchemy metadata")
+        raise
     LOGGER.info("Database migrated at %s", target_path)
     return target_path
 
