@@ -2,8 +2,6 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
-### Added
-- Decision policy adjustments for low-movement shelf-stable categories so donation outcomes appear on the flagged dashboard alongside markdowns.
 
 
 ## [0.3.0] - 2025-10-10
@@ -14,6 +12,7 @@ All notable changes to this project will be documented in this file.
 - CSV exports for flagged decisions and inventory events (`/export/flagged.csv`, `/export/events.csv`) including optional API key protection, documentation updates, and automated tests validating headers.
 - Inventory fixture helpers (`services/integration/fixtures.py`) that provide stock quantities, shelf-life metadata, and supplier assignments for use in demos and offline simulations.
 - Deterministic fake movement generator (`services/integration/movements.py`) that produces repeatable sale, expiry, and clearance events for perishable and low-demand items.
+- Decision policy adjustments for low-movement shelf-stable categories so donation outcomes appear on the flagged dashboard alongside markdowns.
 
 ### Changed
 - `/flagged` responses (scheduler API, reporting API, and CSV export) now enrich each decision with live `product_name`, `category`, store names, and on-hand `qty` sourced from Odoo stock while excluding configurable quarantine locations for faster dashboard reviews.
