@@ -11,6 +11,14 @@ rules:
     price_markdown_pct: 0.2
     notes: Reduce price to clear overstock
   - reason: low_movement
+    category_in:
+      - Center Store
+      - All / Saleable / Center Store
+      - All / Saleable / Frozen
+      - All / Saleable / Bakery
+    outcome: DONATE
+    notes: Donate shelf-stable slow movers
+  - reason: low_movement
     perishable: false
     outcome: DONATE
     notes: Donate shelf-stable slow movers

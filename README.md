@@ -178,6 +178,27 @@ curl -s "http://localhost:8000/flagged?store=Downtown&reason=near_expiry" | jq
 
 Each `/flagged` response (and the dashboard that consumes it) now includes `product_name`, `category`, an ordered `stores` list, on-hand `qty`, and an `estimated_weight_lbs` field derived from the product’s unit of measure. The response metadata also surfaces the total pounds represented by the current filters so you can track waste avoided alongside markdown dollars. Quarantine locations are filtered out automatically; add any additional names to the `inventory.quarantine_locations` array in `services/integration/config.yaml` if your instance uses custom isolation areas.
 
+#### Dashboard impact calculations
+
+The cards at the top of `/dashboard/flagged` and the `/metrics/impact` endpoint rely on helpers in `apps/web/data.py`:
+- `calculate_impact_metrics` loads `out/flagged.json`, normalises each record, and computes:
+  * **Waste diverted (USD)** – sum of `quantity × list_price × (1 − price_markdown_pct)` for every `MARKDOWN` outcome. List prices come from the seeded catalog (see `_product_lookup`).
+  * **Donated weight (lbs)** – sum of `_convert_to_pounds(quantity, uom, category)` for each `DONATE` outcome. Pounds are inferred from the item's unit of measure; when the data is in `EA` we apply category-specific conversion factors (e.g. Dairy ≈ 2 lbs each) defined in `_CATEGORY_WEIGHT_FACTORS`.
+  * **Counts** – number of decisions tagged as `MARKDOWN` or `DONATE`.
+- `append_weight_metadata` enriches every flagged decision with the resolved quantity, unit, and computed pounds so the table, CSV export, and API stay in sync.
+
+By calling `append_weight_metadata` and `calculate_impact_metrics`, both the API and dashboard show the same derived totals without duplicating logic. If you need to validate the numbers manually, run:
+
+```python
+from pathlib import Path
+import json
+from apps/web.data import append_weight_metadata, calculate_impact_metrics
+
+records = json.loads(Path("out/flagged.json").read_text())
+append_weight_metadata(records)
+print(calculate_impact_metrics(records))
+```
+
 Shrink trigger thresholds live in `config/shrink_triggers.yaml`. Tweak the sales window, minimum units sold, or per-category days-of-supply limits and re-run `make simulate` to observe how many `flag_low_movement` and `flag_overstock` events the detector emits.
 
 Decision outcomes, markdown percentages, and donation rules live in `config/decision_policy.yaml`. Adjust the YAML to tune outcomes (e.g. increase markdown percentages for overstock) and re-run `PYTHONPATH=. python3 services/integration/runner.py decisions` to review the updated recommendations.

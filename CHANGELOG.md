@@ -2,6 +2,8 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+### Added
+- Decision policy adjustments for low-movement shelf-stable categories so donation outcomes appear on the flagged dashboard alongside markdowns.
 
 
 ## [0.3.0] - 2025-10-10

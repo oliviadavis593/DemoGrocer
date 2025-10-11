@@ -18,6 +18,22 @@ DEFAULT_FLAGGED_PATH = Path(os.getenv("FOODFLOW_FLAGGED_PATH", "out/flagged.json
 FALLBACK_CASE_UNITS = 12.0
 MINIMUM_DISCOUNT_FACTOR = 0.0
 MAXIMUM_DISCOUNT_FACTOR = 1.0
+_CATEGORY_WEIGHT_FACTORS: dict[str, float] = {
+    "Produce": 1.1,
+    "All / Saleable / Produce": 1.1,
+    "Dairy": 2.0,
+    "All / Saleable / Dairy": 2.0,
+    "Bakery": 0.8,
+    "All / Saleable / Bakery": 0.8,
+    "Center Store": 1.0,
+    "All / Saleable / Center Store": 1.0,
+    "Frozen": 1.5,
+    "All / Saleable / Frozen": 1.5,
+    "Meat": 1.6,
+    "All / Saleable / Meat": 1.6,
+    "Deli": 1.0,
+    "All / Saleable / Deli": 1.0,
+}
 
 
 @dataclass
@@ -242,6 +258,7 @@ def calculate_impact_metrics(records: Sequence[Mapping[str, object]]) -> dict[st
         quantity, uom = _resolve_quantity_and_uom(record, code, uoms)
         if quantity is None or quantity <= 0:
             continue
+        category = str(record.get("category") or "").strip() or None
         if outcome == "MARKDOWN":
             price = _resolve_unit_price(record, code, prices)
             if price is None or price <= 0:
@@ -250,7 +267,7 @@ def calculate_impact_metrics(records: Sequence[Mapping[str, object]]) -> dict[st
             diverted_value += quantity * price * factor
             markdown_count += 1
         elif outcome == "DONATE":
-            pounds = _convert_to_pounds(quantity, uom)
+            pounds = _convert_to_pounds(quantity, uom, category)
             if pounds <= 0:
                 continue
             donated_weight += pounds
@@ -309,15 +326,22 @@ def _resolve_quantity_and_uom(
     return quantity, uom
 
 
-def _convert_to_pounds(quantity: float, uom: str | None) -> float:
+def _convert_to_pounds(quantity: float, uom: str | None, category: str | None = None) -> float:
+    if quantity <= 0:
+        return 0.0
     if uom == "LB" or uom == "LBS":
         return quantity
     if uom == "OZ":
         return quantity / 16.0
     if uom == "CASE":
         return quantity * FALLBACK_CASE_UNITS
-    # Treat EA and unknown units as approximate pounds to provide an estimate.
-    return quantity
+    factor = 1.0
+    if category and isinstance(category, str):
+        factor = _CATEGORY_WEIGHT_FACTORS.get(category.strip(), factor)
+    if uom == "EA":
+        return quantity * factor
+    # Treat unknown units as approximate pounds based on category averages.
+    return quantity * factor
 
 
 def _coerce_positive_float(value: object, *, fallback: float | None = None, clamp: bool = False) -> float | None:
@@ -375,7 +399,8 @@ def append_weight_metadata(records: Iterable[MutableMapping[str, object]]) -> No
             record["unit_of_measure"] = uom
         if quantity is not None:
             record["quantity"] = quantity
-        pounds = _convert_to_pounds(quantity or 0.0, uom)
+            record["qty"] = quantity
+        pounds = _convert_to_pounds(quantity or 0.0, uom, record.get("category"))
         record["estimated_weight_lbs"] = round(pounds, 2)
 
 

@@ -525,12 +525,12 @@ def test_flagged_endpoint_applies_filters(tmp_path: Path) -> None:
     flagged_path = tmp_path / "flagged.json"
     data = [
         {
-            "default_code": "FF101",
-            "product": "Gala Apples",
+            "default_code": "FF117",
+            "product": "2% Milk Half Gallon",
             "reason": "near_expiry",
             "store": "Downtown",
             "stores": ["Downtown"],
-            "category": "Produce",
+            "category": "Dairy",
             "quantity": 4.5,
             "outcome": "MARKDOWN",
         },
@@ -559,23 +559,23 @@ def test_flagged_endpoint_applies_filters(tmp_path: Path) -> None:
     payload = response.json()
     assert payload["meta"]["total"] == 2
     assert payload["meta"]["count"] == 1
-    assert payload["meta"]["estimated_weight_lbs"] == 4.5
-    assert payload["items"][0]["default_code"] == "FF101"
+    assert payload["meta"]["estimated_weight_lbs"] == 9.0
+    assert payload["items"][0]["default_code"] == "FF117"
     assert "Downtown" in payload["meta"]["filters"]["stores"]
-    assert "Produce" in payload["meta"]["filters"]["categories"]
+    assert "Dairy" in payload["meta"]["filters"]["categories"]
     assert payload["meta"]["active_filters"]["store"] == "Downtown"
-    assert payload["items"][0]["product_name"] == "Gala Apples"
+    assert payload["items"][0]["product_name"] == "2% Milk Half Gallon"
     assert payload["items"][0]["qty"] == 4.5
-    assert payload["items"][0]["estimated_weight_lbs"] == 4.5
-    assert payload["items"][0]["unit"] == "LB"
+    assert payload["items"][0]["estimated_weight_lbs"] == 9.0
+    assert payload["items"][0]["unit"] == "EA"
 
 
 def test_export_flagged_csv_includes_headers(tmp_path: Path) -> None:
     flagged_path = tmp_path / "flagged.json"
     data = [
         {
-            "default_code": "FF101",
-            "product": "Gala Apples",
+            "default_code": "FF117",
+            "product": "2% Milk Half Gallon",
             "lot": "LOT-1",
             "reason": "low_movement",
             "outcome": "MARKDOWN",
@@ -585,7 +585,7 @@ def test_export_flagged_csv_includes_headers(tmp_path: Path) -> None:
             "price_markdown_pct": 0.15,
             "store": "Downtown",
             "stores": ["Downtown", "Warehouse"],
-            "category": "Produce",
+            "category": "Dairy",
             "notes": "Discount gently",
         }
     ]
@@ -621,19 +621,19 @@ def test_export_flagged_csv_includes_headers(tmp_path: Path) -> None:
         "notes",
     ]
     assert reader[1] == [
-        "FF101",
-        "Gala Apples",
+        "FF117",
+        "2% Milk Half Gallon",
         "LOT-1",
         "low_movement",
         "MARKDOWN",
         "12.5",
-        "10",
-        "LB",
         "12.5",
+        "EA",
+        "25",
         "0.15",
         "Downtown",
         "Downtown; Warehouse",
-        "Produce",
+        "Dairy",
         "Discount gently",
     ]
 
