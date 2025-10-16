@@ -60,6 +60,12 @@ hundred products, traceable lots, and starting quantities in the "Backroom" and
 "Sales Floor" locations. A summary of the seeded data is written to
 `out/seed_summary.csv`.
 
+The summary CSV now mirrors the data sent to Odoo with per-product `list_price`,
+`unit_cost`, `average_cost`, `quantity_on_hand`, and the split between
+`backroom_qty` / `sales_floor_qty`. These values are reused by the simulator and
+offline fixtures so that demo scenarios start with realistic carrying costs and
+inventory positions.
+
 ### Seeding staff accounts
 
 Provision demo staff users with predefined roles and group memberships:
@@ -96,7 +102,7 @@ inventory_payload = fixtures_as_dicts(fixtures)
 movement_payload = movements_as_dicts(movement_events)
 ```
 
-The fixture loader enriches every catalog item with backroom and sales-floor stock quantities, supplier assignments, and shelf-life metadata derived from per-category perishability windows. The movement generator emits deterministic sale, expiry, markdown, and receiving events for perishable and low-demand products so dashboards and exports remain populated even in offline demos.
+The fixture loader enriches every catalog item with backroom and sales-floor stock quantities, unit costs, average costs, supplier assignments, and shelf-life metadata derived from per-category perishability windows. The movement generator emits deterministic sale, expiry, markdown, and receiving events for perishable and low-demand products so dashboards and exports remain populated even in offline demos.
 
 ### Quick Make Targets
 

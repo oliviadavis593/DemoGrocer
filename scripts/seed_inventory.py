@@ -65,6 +65,104 @@ PRODUCT_CATEGORY_NAMES = [
     "Frozen",
 ]
 
+CATEGORY_PROFILES: Dict[str, Dict[str, float]] = {
+    "Produce": {
+        "cost_factor": 0.58,
+        "avg_cost_variance": 0.012,
+        "base_qty": 26.0,
+        "qty_step": 2.5,
+        "qty_cycle": 5,
+        "backroom_ratio": 0.54,
+        "backroom_variance": 0.05,
+        "min_qty": 18.0,
+    },
+    "Dairy": {
+        "cost_factor": 0.62,
+        "avg_cost_variance": 0.01,
+        "base_qty": 38.0,
+        "qty_step": 2.5,
+        "qty_cycle": 6,
+        "backroom_ratio": 0.6,
+        "backroom_variance": 0.04,
+        "min_qty": 28.0,
+    },
+    "Meat": {
+        "cost_factor": 0.68,
+        "avg_cost_variance": 0.018,
+        "base_qty": 30.0,
+        "qty_step": 3.0,
+        "qty_cycle": 5,
+        "backroom_ratio": 0.52,
+        "backroom_variance": 0.03,
+        "min_qty": 22.0,
+    },
+    "Deli": {
+        "cost_factor": 0.6,
+        "avg_cost_variance": 0.015,
+        "base_qty": 24.0,
+        "qty_step": 2.0,
+        "qty_cycle": 5,
+        "backroom_ratio": 0.5,
+        "backroom_variance": 0.04,
+        "min_qty": 18.0,
+    },
+    "Bakery": {
+        "cost_factor": 0.52,
+        "avg_cost_variance": 0.02,
+        "base_qty": 28.0,
+        "qty_step": 2.2,
+        "qty_cycle": 5,
+        "backroom_ratio": 0.42,
+        "backroom_variance": 0.04,
+        "min_qty": 18.0,
+    },
+    "Center Store": {
+        "cost_factor": 0.57,
+        "avg_cost_variance": 0.012,
+        "base_qty": 55.0,
+        "qty_step": 4.0,
+        "qty_cycle": 6,
+        "backroom_ratio": 0.66,
+        "backroom_variance": 0.03,
+        "min_qty": 36.0,
+    },
+    "Frozen": {
+        "cost_factor": 0.6,
+        "avg_cost_variance": 0.015,
+        "base_qty": 44.0,
+        "qty_step": 2.8,
+        "qty_cycle": 5,
+        "backroom_ratio": 0.68,
+        "backroom_variance": 0.025,
+        "min_qty": 28.0,
+    },
+}
+
+DEFAULT_CATEGORY_PROFILE: Dict[str, float] = {
+    "cost_factor": 0.6,
+    "avg_cost_variance": 0.015,
+    "base_qty": 32.0,
+    "qty_step": 3.0,
+    "qty_cycle": 5,
+    "backroom_ratio": 0.6,
+    "backroom_variance": 0.035,
+    "min_qty": 20.0,
+}
+
+UOM_QUANTITY_FACTORS: Dict[str, float] = {
+    "EA": 1.0,
+    "LB": 1.0,
+    "OZ": 1.0,
+    "CASE": 0.4,
+}
+
+
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
 
 def _product_catalog() -> List[Dict[str, object]]:
     data: Dict[str, Sequence[Sequence[object]]] = {
@@ -192,18 +290,76 @@ def _product_catalog() -> List[Dict[str, object]]:
     products: List[Dict[str, object]] = []
     sku_index = 101
     for category, items in data.items():
-        for name, uom, price in items:
+        profile = CATEGORY_PROFILES.get(category, DEFAULT_CATEGORY_PROFILE)
+        cost_factor = float(profile.get("cost_factor", DEFAULT_CATEGORY_PROFILE["cost_factor"]))
+        avg_cost_variance = float(
+            profile.get("avg_cost_variance", DEFAULT_CATEGORY_PROFILE["avg_cost_variance"])
+        )
+        base_qty = float(profile.get("base_qty", DEFAULT_CATEGORY_PROFILE["base_qty"]))
+        qty_step = float(profile.get("qty_step", DEFAULT_CATEGORY_PROFILE["qty_step"]))
+        qty_cycle = max(int(profile.get("qty_cycle", DEFAULT_CATEGORY_PROFILE["qty_cycle"])), 1)
+        min_qty = float(profile.get("min_qty", DEFAULT_CATEGORY_PROFILE["min_qty"]))
+        backroom_ratio_base = float(
+            profile.get("backroom_ratio", DEFAULT_CATEGORY_PROFILE["backroom_ratio"])
+        )
+        backroom_variance = float(
+            profile.get("backroom_variance", DEFAULT_CATEGORY_PROFILE["backroom_variance"])
+        )
+        for item_offset, (name, uom, price) in enumerate(items):
             default_code = f"FF{sku_index:03d}"
             sku_index += 1
-            standard_price = round(price * 0.6, 2)
+
+            list_price = round(float(price), 2)
+            qty_position = item_offset % qty_cycle
+            raw_quantity = base_qty + qty_position * qty_step
+            raw_quantity = max(raw_quantity, min_qty)
+            uom_factor = UOM_QUANTITY_FACTORS.get(uom, 1.0)
+            quantity_on_hand_raw = raw_quantity * uom_factor
+
+            ratio_delta = ((item_offset % 3) - 1) * backroom_variance
+            backroom_ratio = max(0.2, min(0.8, backroom_ratio_base + ratio_delta))
+            backroom_qty_raw = quantity_on_hand_raw * backroom_ratio
+            sales_floor_qty_raw = quantity_on_hand_raw - backroom_qty_raw
+            min_sales = quantity_on_hand_raw * 0.2
+            if sales_floor_qty_raw < min_sales:
+                sales_floor_qty_raw = min_sales
+                backroom_qty_raw = quantity_on_hand_raw - sales_floor_qty_raw
+
+            backroom_qty = round(backroom_qty_raw, 2)
+            sales_floor_qty = round(sales_floor_qty_raw, 2)
+            quantity_on_hand = round(backroom_qty + sales_floor_qty, 2)
+            if sales_floor_qty <= 0:
+                sales_floor_qty = round(max(quantity_on_hand_raw * 0.25, 1.0), 2)
+                backroom_qty = round(max(quantity_on_hand_raw - sales_floor_qty, 0.5), 2)
+                quantity_on_hand = round(backroom_qty + sales_floor_qty, 2)
+            if backroom_qty <= 0:
+                backroom_qty = round(max(quantity_on_hand_raw * 0.6, 1.0), 2)
+                sales_floor_qty = round(max(quantity_on_hand_raw - backroom_qty, 1.0), 2)
+                quantity_on_hand = round(backroom_qty + sales_floor_qty, 2)
+            if quantity_on_hand <= 0:
+                fallback_total = max(quantity_on_hand_raw, min_qty)
+                backroom_qty = round(max(fallback_total * 0.6, 1.0), 2)
+                sales_floor_qty = round(max(fallback_total - backroom_qty, 1.0), 2)
+                quantity_on_hand = round(backroom_qty + sales_floor_qty, 2)
+
+            unit_cost = round(list_price * cost_factor, 4)
+            avg_adjustment = ((item_offset % 4) - 1.5) * avg_cost_variance
+            average_cost = round(max(0.01, unit_cost * (1.0 + avg_adjustment)), 4)
+            standard_price = average_cost
+
             products.append(
                 {
                     "name": name,
                     "category": category,
                     "uom": uom,
                     "default_code": default_code,
-                    "list_price": round(price, 2),
+                    "list_price": list_price,
                     "standard_price": standard_price,
+                    "unit_cost": unit_cost,
+                    "average_cost": average_cost,
+                    "quantity_on_hand": quantity_on_hand,
+                    "backroom_qty": backroom_qty,
+                    "sales_floor_qty": sales_floor_qty,
                 }
             )
     return products
@@ -217,6 +373,10 @@ class SeedResult:
     lot_id: int
     backroom_qty: float
     sales_floor_qty: float
+    quantity_on_hand: float
+    unit_cost: float
+    average_cost: float
+    list_price: float
 
 
 class InventorySeeder:
@@ -240,23 +400,69 @@ class InventorySeeder:
         results: List[SeedResult] = []
         products = _product_catalog()
         for index, product in enumerate(products):
-            template_id = self._upsert_product_template(product)
-            product_id = self._get_single_variant(template_id)
-            lot_id = self._ensure_lot(product_id, product["default_code"], index)
-            backroom_qty = float(20 - (index % 5))
-            sales_floor_qty = float(10 - (index % 3))
-            self._ensure_quant(product_id, lot_id, self.locations["Backroom"], backroom_qty)
-            self._ensure_quant(product_id, lot_id, self.locations["Sales Floor"], sales_floor_qty)
-            results.append(
-                SeedResult(
-                    default_code=str(product["default_code"]),
-                    template_id=template_id,
-                    product_id=product_id,
-                    lot_id=lot_id,
-                    backroom_qty=backroom_qty,
-                    sales_floor_qty=sales_floor_qty,
+                list_price = round(_coerce_float(product.get("list_price")), 2)
+                standard_price = _coerce_float(product.get("standard_price"))
+                unit_cost = _coerce_float(product.get("unit_cost"), standard_price)
+                average_cost = _coerce_float(product.get("average_cost"), standard_price)
+                fallback_cost = round(max(list_price * 0.6, 0.01), 4)
+                if unit_cost <= 0:
+                    unit_cost = standard_price if standard_price > 0 else fallback_cost
+                if average_cost <= 0:
+                    average_cost = unit_cost if unit_cost > 0 else fallback_cost
+                unit_cost = round(unit_cost, 4)
+                average_cost = round(average_cost, 4)
+                product["list_price"] = list_price
+                product["unit_cost"] = unit_cost
+                product["average_cost"] = average_cost
+                product["standard_price"] = average_cost
+
+                backroom_qty = _coerce_float(product.get("backroom_qty"))
+                sales_floor_qty = _coerce_float(product.get("sales_floor_qty"))
+                if backroom_qty <= 0 or sales_floor_qty <= 0:
+                    backroom_qty, sales_floor_qty = self._fallback_quantities(index)
+                total_quantity = backroom_qty + sales_floor_qty
+                if total_quantity <= 0:
+                    backroom_qty, sales_floor_qty = self._fallback_quantities(index)
+                    total_quantity = backroom_qty + sales_floor_qty
+                catalog_quantity = _coerce_float(product.get("quantity_on_hand"))
+                if catalog_quantity > 0 and total_quantity > 0:
+                    scale = catalog_quantity / total_quantity
+                    backroom_qty *= scale
+                    sales_floor_qty *= scale
+                    total_quantity = backroom_qty + sales_floor_qty
+
+                backroom_qty = round(backroom_qty, 4)
+                sales_floor_qty = round(sales_floor_qty, 4)
+                quantity_on_hand = round(backroom_qty + sales_floor_qty, 4)
+                if quantity_on_hand <= 0:
+                    backroom_qty, sales_floor_qty = self._fallback_quantities(index)
+                    backroom_qty = round(backroom_qty, 4)
+                    sales_floor_qty = round(sales_floor_qty, 4)
+                    quantity_on_hand = round(backroom_qty + sales_floor_qty, 4)
+
+                product["backroom_qty"] = backroom_qty
+                product["sales_floor_qty"] = sales_floor_qty
+                product["quantity_on_hand"] = quantity_on_hand
+
+                template_id = self._upsert_product_template(product)
+                product_id = self._get_single_variant(template_id)
+                lot_id = self._ensure_lot(product_id, product["default_code"], index)
+                self._ensure_quant(product_id, lot_id, self.locations["Backroom"], backroom_qty)
+                self._ensure_quant(product_id, lot_id, self.locations["Sales Floor"], sales_floor_qty)
+                results.append(
+                    SeedResult(
+                        default_code=str(product["default_code"]),
+                        template_id=template_id,
+                        product_id=product_id,
+                        lot_id=lot_id,
+                        backroom_qty=backroom_qty,
+                        sales_floor_qty=sales_floor_qty,
+                        quantity_on_hand=quantity_on_hand,
+                        unit_cost=unit_cost,
+                        average_cost=average_cost,
+                        list_price=list_price,
+                    )
                 )
-            )
         return results
 
     def _assert_models(self) -> None:
@@ -322,6 +528,11 @@ class InventorySeeder:
             )
             self.locations[name] = location_id
 
+    def _fallback_quantities(self, index: int) -> tuple[float, float]:
+        backroom = max(4.0, 20.0 - (index % 5) * 1.8)
+        sales_floor = max(2.0, 10.0 - (index % 3) * 1.2)
+        return float(backroom), float(sales_floor)
+
     # Entity helpers -------------------------------------------------------------
     def _upsert_product_template(self, product: Dict[str, object]) -> int:
         domain = [("default_code", "=", product["default_code"])]
@@ -382,24 +593,86 @@ class InventorySeeder:
         location_id: int,
         quantity: float,
     ) -> int:
-        values = {
-            "product_id": product_id,
-            "location_id": location_id,
-            "quantity": quantity,
-            "reserved_quantity": 0.0,
+        context = {
+            "inventory_mode": True,
+            "inventory_adjustment_name": "FoodFlow Seed",
         }
         domain = [
             ("product_id", "=", product_id),
             ("location_id", "=", location_id),
         ]
         if lot_id is not None:
-            values["lot_id"] = lot_id
             domain.append(("lot_id", "=", lot_id))
-        return self._upsert_single(
+        existing = self.client.search_read(
             "stock.quant",
             domain=domain,
-            values=values,
+            fields=["id"],
+            limit=1,
         )
+        values: Dict[str, object] = {
+            "quantity": float(quantity),
+            "reserved_quantity": 0.0,
+            "inventory_quantity": 0.0,
+        }
+        if existing:
+            record_id = int(existing[0]["id"])
+            self.client.write("stock.quant", record_id, values, context=context)
+            return record_id
+
+        create_values: Dict[str, object] = {
+            "product_id": product_id,
+            "location_id": location_id,
+            "quantity": float(quantity),
+            "reserved_quantity": 0.0,
+            "inventory_quantity": 0.0,
+        }
+        if lot_id is not None:
+            create_values["lot_id"] = lot_id
+        record_id = self.client.create("stock.quant", create_values, context=context)
+        return record_id
+
+    def _ensure_inventory_adjustment(self, location_id: int) -> int:
+        inventory_id = self.inventory_adjustments.get(location_id)
+        if inventory_id is not None:
+            return inventory_id
+        location_name = self.location_names.get(location_id)
+        if location_name is None:
+            record = self.client.search_read(
+                "stock.location",
+                domain=[("id", "=", location_id)],
+                fields=["name"],
+                limit=1,
+            )
+            location_name = str(record[0]["name"]) if record else f"Location {location_id}"
+            self.location_names[location_id] = location_name
+        values = {
+            "name": f"FoodFlow Seed ({location_name})",
+            "location_ids": [(6, 0, [location_id])],
+            "prefill_counted_quantity": "zero",
+        }
+        inventory_id = self.client.create("stock.inventory", values)
+        self.inventory_adjustments[location_id] = inventory_id
+        return inventory_id
+
+    def _resolve_product_uom(self, product_id: int, uom_key: Optional[str] = None) -> int:
+        cached = self.product_uoms.get(product_id)
+        if cached:
+            return cached
+        if uom_key and uom_key in self.uoms:
+            uom_id = self.uoms[uom_key]
+            self.product_uoms[product_id] = uom_id
+            return uom_id
+        records = self.client.call(
+            "product.product",
+            "read",
+            [[product_id], ["uom_id"]],
+        )
+        if records:
+            uom_id = self._extract_many2one_id(records[0].get("uom_id"))
+            if uom_id:
+                self.product_uoms[product_id] = uom_id
+                return uom_id
+        raise OdooClientError(f"Unable to resolve unit of measure for product {product_id}.")
 
     # Generic helpers ------------------------------------------------------------
     def _upsert_single(self, model: str, domain: Sequence[object], values: Dict[str, object]) -> int:
@@ -420,6 +693,7 @@ class InventorySeeder:
         return int(records[0]["id"]) if records else 0
 
 
+
 def write_summary(results: Iterable[SeedResult], output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", newline="") as handle:
@@ -430,6 +704,10 @@ def write_summary(results: Iterable[SeedResult], output: Path) -> None:
                 "product_template_id",
                 "product_variant_id",
                 "lot_id",
+                "list_price",
+                "unit_cost",
+                "average_cost",
+                "quantity_on_hand",
                 "backroom_qty",
                 "sales_floor_qty",
             ]
@@ -441,8 +719,12 @@ def write_summary(results: Iterable[SeedResult], output: Path) -> None:
                     result.template_id,
                     result.product_id,
                     result.lot_id,
-                    f"{result.backroom_qty:.2f}",
-                    f"{result.sales_floor_qty:.2f}",
+                    f"{result.list_price:.2f}",
+                    f"{result.unit_cost:.4f}",
+                    f"{result.average_cost:.4f}",
+                    f"{result.quantity_on_hand:.4f}",
+                    f"{result.backroom_qty:.4f}",
+                    f"{result.sales_floor_qty:.4f}",
                 ]
             )
 

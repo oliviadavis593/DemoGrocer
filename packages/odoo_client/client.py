@@ -77,8 +77,9 @@ class OdooClient:
         self.username = config.username
         self.password = config.password
         self._uid: Optional[int] = None
-        self._common = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/common")
-        self._object = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/object")
+        proxy_options = {"allow_none": True}
+        self._common = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/common", **proxy_options)
+        self._object = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/object", **proxy_options)
 
     @staticmethod
     def _build_config(
@@ -141,8 +142,17 @@ class OdooClient:
             kwargs,
         )
 
-    def create(self, model: str, values: Dict[str, Any]) -> int:
+    def create(
+        self,
+        model: str,
+        values: Dict[str, Any],
+        *,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> int:
         self._ensure_authenticated()
+        kwargs: Dict[str, Any] = {}
+        if context:
+            kwargs["context"] = context
         record_id = self._object.execute_kw(
             self.database,
             self._uid,
@@ -150,16 +160,27 @@ class OdooClient:
             model,
             "create",
             [values],
+            kwargs,
         )
         return int(record_id)
 
-    def write(self, model: str, ids: Union[int, Sequence[int]], values: Dict[str, Any]) -> bool:
+    def write(
+        self,
+        model: str,
+        ids: Union[int, Sequence[int]],
+        values: Dict[str, Any],
+        *,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         self._ensure_authenticated()
         record_ids: List[int]
         if isinstance(ids, int):
             record_ids = [ids]
         else:
             record_ids = [int(i) for i in ids]
+        kwargs: Dict[str, Any] = {}
+        if context:
+            kwargs["context"] = context
         return bool(
             self._object.execute_kw(
                 self.database,
@@ -168,7 +189,32 @@ class OdooClient:
                 model,
                 "write",
                 [record_ids, values],
+                kwargs,
             )
+        )
+
+    def call(
+        self,
+        model: str,
+        method: str,
+        args: Optional[Sequence[Any]] = None,
+        *,
+        context: Optional[Dict[str, Any]] = None,
+        kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        self._ensure_authenticated()
+        call_args: List[Any] = list(args or [])
+        call_kwargs: Dict[str, Any] = dict(kwargs or {})
+        if context:
+            call_kwargs["context"] = context
+        return self._object.execute_kw(
+            self.database,
+            self._uid,
+            self.password,
+            model,
+            method,
+            call_args,
+            call_kwargs,
         )
 
     # Internal helpers ------------------------------------------------------------

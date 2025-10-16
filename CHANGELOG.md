@@ -3,6 +3,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+
+## [0.4.1] - 2025-10-16
+### Added
+- Richer product catalog metadata powering the seeding flow, including realistic quantity on hand splits, wholesale unit costs, and average cost baselines replicated across Odoo and offline fixtures.
+
+### Changed
+- Inventory seed script now adjusts stock quants in inventory mode so Odoo reflects the new on-hand quantities immediately, and README highlights the expanded cost/quantity summary written to `out/seed_summary.csv`.
+
+
 ## [0.4.0] - 2025-10-11
 ### Added
 - Compliance data model and recorder for IRS 170(e)(3) events, including SQLAlchemy-backed `ComplianceEvent` table, JSON-schema validation (`contracts/schemas/compliance.schema.json`), CSV export mirroring, audit logging, and demo CLI support.

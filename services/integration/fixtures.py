@@ -61,6 +61,13 @@ _DEFAULT_CATEGORY_CONFIG: dict[str, object] = {
 }
 
 
+def _to_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass(frozen=True)
 class InventoryFixture:
     """Representation of a single inventory item for offline demos."""
@@ -73,6 +80,8 @@ class InventoryFixture:
     list_price: float
     backroom_qty: float
     sales_floor_qty: float
+    unit_cost: float
+    average_cost: float
     shelf_life_days: int
     life_date: date
     perishable: bool
@@ -97,6 +106,8 @@ class InventoryFixture:
             "backroom_qty": self.backroom_qty,
             "sales_floor_qty": self.sales_floor_qty,
             "stock_on_hand": self.stock_on_hand,
+            "unit_cost": self.unit_cost,
+            "average_cost": self.average_cost,
             "shelf_life_days": self.shelf_life_days,
             "life_date": self.life_date.isoformat(),
             "perishable": self.perishable,
@@ -149,14 +160,27 @@ def load_inventory_fixtures(base_date: date | None = None) -> List[InventoryFixt
         shelf_life_days = max(3, base_shelf_life + ((index % 4) - 1))
         life_date = today + timedelta(days=shelf_life_days)
 
-        backroom_qty, sales_floor_qty = _derive_quantities(perishable, demand_profile, index)
+        backroom_catalog = _to_float(entry.get("backroom_qty"))
+        sales_catalog = _to_float(entry.get("sales_floor_qty"))
+        if backroom_catalog <= 0 or sales_catalog <= 0:
+            backroom_qty, sales_floor_qty = _derive_quantities(perishable, demand_profile, index)
+        else:
+            backroom_qty, sales_floor_qty = backroom_catalog, sales_catalog
         uom = str(entry.get("uom") or "EA")
 
-        list_price_raw = entry.get("list_price")
-        try:
-            list_price = float(list_price_raw) if list_price_raw is not None else 0.0
-        except (TypeError, ValueError):
-            list_price = 0.0
+        list_price = max(_to_float(entry.get("list_price")), 0.0)
+        unit_cost = _to_float(entry.get("unit_cost"), _to_float(entry.get("standard_price")))
+        average_cost = _to_float(entry.get("average_cost"), unit_cost)
+        if unit_cost <= 0:
+            unit_cost = average_cost if average_cost > 0 else list_price * 0.6
+        if average_cost <= 0:
+            average_cost = unit_cost if unit_cost > 0 else list_price * 0.6
+
+        backroom_qty = round(backroom_qty, 4)
+        sales_floor_qty = round(sales_floor_qty, 4)
+        list_price = round(list_price, 2)
+        unit_cost = round(unit_cost, 4)
+        average_cost = round(average_cost, 4)
 
         fixtures.append(
             InventoryFixture(
@@ -168,6 +192,8 @@ def load_inventory_fixtures(base_date: date | None = None) -> List[InventoryFixt
                 list_price=list_price,
                 backroom_qty=backroom_qty,
                 sales_floor_qty=sales_floor_qty,
+                unit_cost=unit_cost,
+                average_cost=average_cost,
                 shelf_life_days=shelf_life_days,
                 life_date=life_date,
                 perishable=perishable,
