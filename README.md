@@ -282,7 +282,7 @@ Example requests:
 
 ```bash
 curl -s http://localhost:8000/
-# {"app":"FoodFlow reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","metrics_last_sync":"/metrics/last_sync","metrics_impact":"/metrics/impact","at_risk":"/at-risk","flagged":"/flagged","dashboard_flagged":"/dashboard/flagged","labels_markdown":"/labels/markdown","labels_index":"/out/labels/","flagged_export":"/export/flagged.csv","events_export":"/export/events.csv","compliance_events":"/compliance/events","compliance_export":"/compliance/export.csv"},"docs":"See README.md for curl examples and Make targets."}
+# {"app":"FoodFlow reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","metrics_last_sync":"/metrics/last_sync","metrics_impact":"/metrics/impact","at_risk":"/at-risk","flagged":"/flagged","dashboard_flagged":"/dashboard/flagged","dashboard_at_risk":"/dashboard/at-risk","labels_markdown":"/labels/markdown","labels_index":"/out/labels/","flagged_export":"/export/flagged.csv","events_export":"/export/events.csv","compliance_events":"/compliance/events","compliance_export":"/compliance/export.csv"},"docs":"See README.md for curl examples and Make targets."}
 
 curl -s http://localhost:8000/health
 # {"status":"ok"}
@@ -342,6 +342,8 @@ curl -s "http://localhost:8000/recall/quarantined"
 ```
 
 The `/dashboard/flagged` view consumes `/metrics/last_sync` and surfaces a red banner if the most recent integration sync is more than 30 minutes old, helping surface stale inventory data during reviews.
+
+The `/dashboard/at-risk` view fetches `/at-risk` in real time, summarizes overdue and soon-to-expire lots, and highlights configuration gaps when Odoo connectivity or expiry metadata are missing.
 
 If `out/events.jsonl` is missing or contains invalid JSON, the API returns
 `{"events": [], "meta": {"exists": false, "error": "..."} }` with a 200

@@ -249,6 +249,7 @@ def create_app(
                 "at_risk": "/at-risk",
                 "flagged": "/flagged",
                 "dashboard_flagged": "/dashboard/flagged",
+                "dashboard_at_risk": "/dashboard/at-risk",
                 "labels_markdown": "/labels/markdown",
                 "labels_index": "/out/labels/",
                 "recall_trigger": "/recall/trigger",
@@ -512,7 +513,7 @@ def create_app(
 <body>
   <header>
     <h1>Flagged Decisions Dashboard</h1>
-    <p class="subtitle">Review flagged inventory, monitor impact, filter by store, category, or reason, and print labels in bulk.</p>
+    <p class="subtitle">Review flagged inventory, monitor impact, filter by store, category, or reason, and print labels in bulk. Need to triage expiring lots? Visit the <a href="/dashboard/at-risk">At-Risk Inventory dashboard</a>.</p>
     <div id="sync-banner" class="sync-banner" role="status" aria-live="polite"></div>
   </header>
   <section class="overview" aria-label="Impact overview">
@@ -717,6 +718,7 @@ def create_app(
         donatedElement.textContent = `${pounds.toFixed(1)} lbs`;
       }
     }
+
 
     function populateFilters(filters) {
       populateSelect(document.getElementById("filter-store"), filters.stores || []);
@@ -958,6 +960,526 @@ def create_app(
     loadFlagged();
     loadLastSync();
     updatePrintButtonState();
+  </script>
+</body>
+</html>
+        """.strip()
+        return HTMLResponse(content=html)
+
+    @app.get("/dashboard/at-risk", response_class=HTMLResponse)
+    def dashboard_at_risk() -> HTMLResponse:
+        html = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>At-Risk Inventory Dashboard</title>
+  <style>
+    :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; padding: 1.75rem; background: #f8fafc; color: #0f172a; }
+    header { margin-bottom: 1.5rem; }
+    h1 { font-size: 1.75rem; margin: 0 0 0.5rem; }
+    .subtitle { margin: 0; color: #475569; font-size: 0.95rem; line-height: 1.5; max-width: 72ch; }
+    .subtitle a { color: inherit; text-decoration: underline; }
+    nav.top-nav { margin-top: 1rem; font-size: 0.9rem; color: #64748b; }
+    nav.top-nav a { color: inherit; text-decoration: none; margin-right: 1rem; }
+    nav.top-nav a:hover { text-decoration: underline; }
+    .status-banner { margin: 0 0 1.25rem; padding: 0.75rem 1rem; border-radius: 8px; border: 1px solid transparent; background: #e0f2fe; color: #0c4a6e; font-size: 0.95rem; display: none; }
+    .status-banner.visible { display: block; }
+    .status-banner.error { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+    .status-banner.success { background: #ecfdf5; border-color: #bbf7d0; color: #047857; }
+    .status-banner.info { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+    .status-banner.warning { background: #fffbeb; border-color: #fde68a; color: #b45309; }
+    .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    .card { background: #fff; border-radius: 10px; padding: 1rem; box-shadow: 0 20px 30px rgba(15, 23, 42, 0.08); }
+    .card h2 { margin: 0; font-size: 0.95rem; letter-spacing: 0.04em; text-transform: uppercase; color: #64748b; }
+    .metric { font-size: 2rem; font-weight: 600; margin: 0.35rem 0 0.2rem; color: #0f172a; }
+    .metric-caption { margin: 0; color: #475569; font-size: 0.9rem; }
+    .metric-footer { margin: 0.4rem 0 0; font-size: 0.78rem; color: #64748b; }
+    .controls { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; align-items: flex-end; }
+    .controls label { display: flex; flex-direction: column; font-size: 0.9rem; gap: 0.35rem; min-width: 10rem; color: #1f2937; }
+    select, button { padding: 0.45rem 0.6rem; font-size: 0.95rem; border-radius: 6px; border: 1px solid #cbd5f5; background: #fff; color: inherit; }
+    button.primary { background: #2563eb; border-color: #2563eb; color: #fff; cursor: pointer; }
+    button.primary:disabled { opacity: 0.6; cursor: not-allowed; }
+    .controls a { font-size: 0.9rem; color: #2563eb; text-decoration: none; }
+    .controls a:hover { text-decoration: underline; }
+    #status { min-height: 1.5rem; padding: 0.75rem 1rem; border-radius: 8px; background: #e2e8f0; color: #1e293b; border: 1px solid transparent; margin-bottom: 1rem; font-size: 0.95rem; display: none; }
+    #status.visible { display: block; }
+    #status.error { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+    #status.info { background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; }
+    #status.success { background: #ecfdf5; border-color: #bbf7d0; color: #047857; }
+    #status.warning { background: #fffbeb; border-color: #fde68a; color: #b45309; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 12px 18px rgba(15, 23, 42, 0.05); }
+    th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #e2e8f0; font-size: 0.92rem; vertical-align: top; }
+    th { background: #f1f5f9; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.75rem; color: #475569; }
+    tbody tr:hover { background: #f8fafc; }
+    tbody tr.overdue { background: #fff1f2; }
+    tbody tr.due-today { background: #fefce8; }
+    .badge { display: inline-flex; align-items: center; padding: 0.15rem 0.45rem; border-radius: 999px; font-size: 0.75rem; background: #e0f2fe; color: #0369a1; font-weight: 600; }
+    .badge.overdue { background: #fee2e2; color: #b91c1c; }
+    .badge.due-today { background: #fef08a; color: #92400e; }
+    .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.75rem; margin-bottom: 1.25rem; }
+    .meta-card { background: #fff; border-radius: 8px; padding: 0.75rem 1rem; border: 1px solid #e2e8f0; font-size: 0.88rem; color: #475569; }
+    .meta-card strong { display: block; font-size: 0.78rem; letter-spacing: 0.04em; text-transform: uppercase; color: #1f2937; margin-bottom: 0.2rem; }
+    footer { margin-top: 1.5rem; font-size: 0.8rem; color: #64748b; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #0f172a; color: #e2e8f0; }
+      .subtitle { color: #cbd5f5; }
+      nav.top-nav a { color: #93c5fd; }
+      .status-banner { background: rgba(14, 116, 144, 0.35); color: #bae6fd; border-color: rgba(14, 116, 144, 0.6); }
+      .status-banner.error { background: rgba(127, 29, 29, 0.35); color: #fecaca; border-color: rgba(185, 28, 28, 0.7); }
+      .status-banner.success { background: rgba(13, 148, 136, 0.35); color: #99f6e4; border-color: rgba(13, 148, 136, 0.6); }
+      .status-banner.info { background: rgba(30, 64, 175, 0.35); color: #dbeafe; border-color: rgba(59, 130, 246, 0.6); }
+      .status-banner.warning { background: rgba(146, 64, 14, 0.35); color: #fcd34d; border-color: rgba(217, 119, 6, 0.6); }
+      .card, table, .meta-card { background: #1e293b; border-color: #334155; box-shadow: none; color: #e2e8f0; }
+      .metric { color: #f8fafc; }
+      .metric-caption { color: #cbd5f5; }
+      .metric-footer { color: #a5b4fc; }
+      th { background: #0f172a; color: #94a3b8; }
+      tbody tr:hover { background: rgba(51, 65, 85, 0.45); }
+      tbody tr.overdue { background: rgba(190, 18, 60, 0.25); }
+      tbody tr.due-today { background: rgba(217, 119, 6, 0.25); }
+      select, button { background: #1e293b; border-color: #475569; color: inherit; }
+      .controls a { color: #93c5fd; }
+      .controls label { color: #e2e8f0; }
+      .meta-card { color: #e2e8f0; }
+      .meta-card strong { color: #cbd5f5; }
+      #meta-expiry-field,
+      #meta-window,
+      #meta-refreshed,
+      #meta-source { color: #e2e8f0; }
+      #status { background: #1e293b; border-color: #334155; color: #e2e8f0; }
+      #status.info { background: rgba(30, 64, 175, 0.35); border-color: rgba(30, 64, 175, 0.55); color: #dbeafe; }
+      #status.error { background: rgba(127, 29, 29, 0.35); border-color: rgba(127, 29, 29, 0.6); color: #fecaca; }
+      #status.success { background: rgba(13, 148, 136, 0.35); border-color: rgba(13, 148, 136, 0.6); color: #99f6e4; }
+      #status.warning { background: rgba(146, 64, 14, 0.35); border-color: rgba(146, 64, 14, 0.6); color: #fcd34d; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>At-Risk Inventory Dashboard</h1>
+    <p class="subtitle">
+      Monitor lots that are approaching expiry, triage overdue items, and share visibility with store teams.
+      Looking for markdown or donation decisions? Visit the <a href="/dashboard/flagged">Flagged Decisions dashboard</a>.
+    </p>
+    <nav class="top-nav">
+      <a href="/">API index</a>
+      <a href="/dashboard/flagged">Flagged Decisions</a>
+      <a href="/export/flagged.csv">Flagged CSV</a>
+      <a href="/at-risk">Raw JSON</a>
+    </nav>
+  </header>
+
+  <div id="sync-status" class="status-banner"></div>
+
+  <section class="overview" aria-label="At-risk summary">
+    <article class="card">
+      <h2>Total At-Risk</h2>
+      <p class="metric" id="metric-total">—</p>
+      <p class="metric-caption">Lots within the selected window</p>
+      <p class="metric-footer" id="metric-total-footer"></p>
+    </article>
+    <article class="card">
+      <h2>Due Today</h2>
+      <p class="metric" id="metric-due-today">—</p>
+      <p class="metric-caption">Lots that expire before midnight</p>
+      <p class="metric-footer" id="metric-due-today-footer"></p>
+    </article>
+    <article class="card">
+      <h2>Overdue</h2>
+      <p class="metric" id="metric-overdue">—</p>
+      <p class="metric-caption">Lots past their expiry date</p>
+      <p class="metric-footer" id="metric-overdue-footer"></p>
+    </article>
+    <article class="card">
+      <h2>Upcoming</h2>
+      <p class="metric" id="metric-upcoming">—</p>
+      <p class="metric-caption">Lots expiring in the window</p>
+      <p class="metric-footer" id="metric-upcoming-footer"></p>
+    </article>
+  </section>
+
+  <section class="controls">
+    <label for="filter-days">Expiry window
+      <select id="filter-days" name="filter-days"></select>
+    </label>
+    <button class="primary" id="refresh-btn" type="button">Refresh</button>
+    <a id="download-json" href="/at-risk" target="_blank" rel="noopener">Open JSON</a>
+  </section>
+
+  <div id="status" role="status" aria-live="polite"></div>
+
+  <div class="meta-grid" aria-label="At-risk metadata">
+    <div class="meta-card">
+      <strong>Lot Expiry Field</strong>
+      <span id="meta-expiry-field">—</span>
+    </div>
+    <div class="meta-card">
+      <strong>Window</strong>
+      <span id="meta-window">—</span>
+    </div>
+    <div class="meta-card">
+      <strong>Last Refreshed</strong>
+      <span id="meta-refreshed">—</span>
+    </div>
+    <div class="meta-card">
+      <strong>Source</strong>
+      <span id="meta-source">Odoo inventory snapshot</span>
+    </div>
+  </div>
+
+  <section aria-label="At-risk lots table">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Product</th>
+          <th scope="col">Code</th>
+          <th scope="col">Lot</th>
+          <th scope="col">Expiry</th>
+          <th scope="col">Days Left</th>
+          <th scope="col">Quantity</th>
+        </tr>
+      </thead>
+      <tbody id="at-risk-tbody">
+        <tr><td colspan="6">Loading at-risk lots…</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>
+    Inventory data is sourced from the most recent Odoo snapshot. Adjust the expiry window to expand or narrow the queue for store teams.
+  </footer>
+
+  <script>
+    const state = {
+      items: [],
+      meta: {},
+      error: null,
+      loading: false,
+      filters: { days: 3 },
+      lastFetched: null
+    };
+
+    const DAY_OPTIONS = [1, 2, 3, 5, 7, 10, 14, 21, 30];
+
+    function populateDays() {
+      const select = document.getElementById("filter-days");
+      if (!select) return;
+      select.innerHTML = "";
+      DAY_OPTIONS.forEach((value) => {
+        const option = document.createElement("option");
+        option.value = String(value);
+        option.textContent = value === 1 ? "1 day" : `${value} days`;
+        if (value === state.filters.days) {
+          option.selected = true;
+        }
+        select.appendChild(option);
+      });
+    }
+
+    function parseDays(entry) {
+      const raw = Number(entry?.days_left ?? entry?.days_until);
+      if (Number.isNaN(raw)) {
+        return null;
+      }
+      return raw;
+    }
+
+    function filterAtRiskItems(items, windowDays) {
+      if (!Array.isArray(items)) {
+        return [];
+      }
+      return items.filter((entry) => {
+        const days = parseDays(entry);
+        if (days === null) {
+          return true;
+        }
+        if (days < 0) {
+          return true;
+        }
+        return days <= windowDays;
+      });
+    }
+
+    function getFilteredItems() {
+      return filterAtRiskItems(state.items, state.filters.days);
+    }
+
+    function setStatus(message, tone) {
+      const status = document.getElementById("status");
+      if (!status) return;
+      if (!message) {
+        status.className = "";
+        status.classList.remove("visible");
+        status.textContent = "";
+        return;
+      }
+      status.className = tone ? `${tone} visible` : "visible";
+      status.textContent = message;
+    }
+
+    function setSyncBanner(message, tone) {
+      const banner = document.getElementById("sync-status");
+      if (!banner) return;
+      if (!message) {
+        banner.className = "status-banner";
+        banner.textContent = "";
+        return;
+      }
+      banner.className = `status-banner visible ${tone || ""}`.trim();
+      banner.textContent = message;
+    }
+
+    function formatDate(value) {
+      if (!value) return "—";
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) {
+        return value;
+      }
+      return parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    }
+
+    function formatDateTime(value) {
+      if (!value) return "—";
+      return value.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    }
+
+    function renderMeta() {
+      const meta = state.meta || {};
+      document.getElementById("meta-expiry-field").textContent = meta.lot_expiry_field || "—";
+      const windowText = state.filters.days === 1 ? "Next 1 day" : `Next ${state.filters.days} days`;
+      document.getElementById("meta-window").textContent = windowText;
+      document.getElementById("meta-refreshed").textContent = formatDateTime(state.lastFetched);
+    }
+
+    function renderSummary() {
+      const items = Array.isArray(state.items) ? state.items : [];
+      const filtered = getFilteredItems();
+      let total = filtered.length;
+      let dueToday = 0;
+      let overdue = 0;
+      let upcoming = 0;
+      filtered.forEach((item) => {
+        const raw = parseDays(item);
+        if (raw === null) {
+          return;
+        }
+        if (raw < 0) {
+          overdue += 1;
+        } else if (raw === 0) {
+          dueToday += 1;
+        } else if (raw > 0 && raw <= state.filters.days) {
+          upcoming += 1;
+        }
+      });
+
+      document.getElementById("metric-total").textContent = total;
+      document.getElementById("metric-total-footer").textContent = total === 1 ? "1 lot flagged" : `${total} lots flagged`;
+
+      document.getElementById("metric-due-today").textContent = dueToday;
+      document.getElementById("metric-due-today-footer").textContent = dueToday ? "Prioritize these lots first" : "No lots expiring today";
+
+      document.getElementById("metric-overdue").textContent = overdue;
+      document.getElementById("metric-overdue-footer").textContent = overdue ? "Escalate overdue lots immediately" : "No overdue lots";
+
+      document.getElementById("metric-upcoming").textContent = upcoming;
+      const span = state.filters.days;
+      const caption = upcoming ? `Expiring in the next ${span} day${span === 1 ? "" : "s"}` : `No lots expiring in the next ${span} day${span === 1 ? "" : "s"}`;
+      document.getElementById("metric-upcoming-footer").textContent = caption;
+    }
+
+    function renderTable() {
+      const tbody = document.getElementById("at-risk-tbody");
+      if (!tbody) return;
+      tbody.innerHTML = "";
+
+      if (state.loading) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 6;
+        cell.textContent = "Loading at-risk lots…";
+        row.appendChild(cell);
+        tbody.appendChild(row);
+        return;
+      }
+
+      const meta = state.meta || {};
+      if (meta.error === "odoo_unreachable") {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 6;
+        cell.textContent = "Connect to Odoo to retrieve at-risk inventory.";
+        row.appendChild(cell);
+        tbody.appendChild(row);
+        return;
+      }
+      if (meta.reason === "no_stock_lot_model") {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 6;
+        cell.textContent = "Enable the stock.lot model in Odoo to surface at-risk items.";
+        row.appendChild(cell);
+        tbody.appendChild(row);
+        return;
+      }
+      if (meta.reason === "no_expiry_field") {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 6;
+        cell.textContent = "Configure a lot expiry field in Odoo to compute at-risk windows.";
+        row.appendChild(cell);
+        tbody.appendChild(row);
+        return;
+      }
+
+      const filteredItems = getFilteredItems();
+      if (!filteredItems.length) {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 6;
+        cell.textContent = `No at-risk lots within the next ${state.filters.days} day${state.filters.days === 1 ? "" : "s"}.`;
+        row.appendChild(cell);
+        tbody.appendChild(row);
+        return;
+      }
+
+      filteredItems.forEach((entry) => {
+        const row = document.createElement("tr");
+        const daysRaw = parseDays(entry);
+        if (daysRaw !== null) {
+          if (daysRaw < 0) {
+            row.classList.add("overdue");
+          } else if (daysRaw === 0) {
+            row.classList.add("due-today");
+          }
+        }
+
+        const productCell = document.createElement("td");
+        productCell.textContent = entry.product || entry.product_name || "—";
+        row.appendChild(productCell);
+
+        row.appendChild(createCell(entry.default_code || "—"));
+        row.appendChild(createCell(entry.lot || "—"));
+        row.appendChild(createCell(formatDate(entry.life_date)));
+
+        const daysCell = document.createElement("td");
+        if (daysRaw === null) {
+          daysCell.textContent = "—";
+        } else {
+          if (daysRaw < 0) {
+            const badge = document.createElement("span");
+            badge.className = "badge overdue";
+            badge.textContent = `${daysRaw} days`;
+            daysCell.appendChild(badge);
+          } else if (daysRaw === 0) {
+            const badge = document.createElement("span");
+            badge.className = "badge due-today";
+            badge.textContent = "Expires today";
+            daysCell.appendChild(badge);
+          } else {
+            daysCell.textContent = `${daysRaw} day${daysRaw === 1 ? "" : "s"}`;
+          }
+        }
+        row.appendChild(daysCell);
+
+        const qtyCell = document.createElement("td");
+        const quantity = Number(entry.quantity ?? entry.qty);
+        if (Number.isNaN(quantity)) {
+          qtyCell.textContent = "—";
+        } else {
+          qtyCell.textContent = quantity.toFixed(2);
+        }
+        row.appendChild(qtyCell);
+
+        tbody.appendChild(row);
+      });
+    }
+
+    function createCell(value) {
+      const cell = document.createElement("td");
+      cell.textContent = typeof value === "string" ? value : value ?? "—";
+      return cell;
+    }
+
+    async function loadData() {
+      state.loading = true;
+      state.error = null;
+      setStatus("Loading at-risk lots…", "info");
+      setSyncBanner("", "");
+      renderTable();
+      try {
+        const response = await fetch(`/at-risk?days=${encodeURIComponent(state.filters.days)}`);
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`);
+        }
+        const payload = await response.json();
+        state.items = Array.isArray(payload.items) ? payload.items : [];
+        state.meta = payload && typeof payload.meta === "object" ? payload.meta : {};
+        state.lastFetched = new Date();
+        state.loading = false;
+        renderSummary();
+        renderTable();
+        renderMeta();
+
+        const meta = state.meta || {};
+        const filteredCount = getFilteredItems().length;
+        if (meta.error === "odoo_unreachable") {
+          setStatus("Live Odoo connectivity is required to populate at-risk inventory.", "error");
+          setSyncBanner("Unable to reach Odoo. Check credentials or retry shortly.", "error");
+          return;
+        }
+        if (meta.reason === "no_stock_lot_model") {
+          setStatus("Enable the stock.lot model in Odoo to retrieve at-risk lots.", "warning");
+          return;
+        }
+        if (meta.reason === "no_expiry_field") {
+          setStatus("Configure a lot expiry field (life_date or expiration_date) in Odoo to compute at-risk lots.", "warning");
+          return;
+        }
+        if (!filteredCount) {
+          setStatus(`No lots are within ${state.filters.days} day${state.filters.days === 1 ? "" : "s"} of expiry.`, "success");
+        } else {
+          setStatus(`Tracking ${filteredCount} at-risk lot${filteredCount === 1 ? "" : "s"} within the next ${state.filters.days} day${state.filters.days === 1 ? "" : "s"}.`, "success");
+        }
+      } catch (error) {
+        console.error(error);
+        state.loading = false;
+        state.items = [];
+        state.meta = {};
+        state.error = error instanceof Error ? error.message : "unknown";
+        renderSummary();
+        renderTable();
+        renderMeta();
+        setStatus("Unable to load at-risk lots. Check console output for details.", "error");
+        setSyncBanner("The last refresh failed. Re-run the loader after verifying connectivity.", "warning");
+      }
+    }
+
+    document.getElementById("filter-days")?.addEventListener("change", (event) => {
+      const value = Number(event.target.value);
+      if (!Number.isFinite(value) || value <= 0) {
+        return;
+      }
+      state.filters.days = value;
+      const link = document.getElementById("download-json");
+      if (link) {
+        link.href = `/at-risk?days=${encodeURIComponent(value)}`;
+      }
+      renderMeta();
+      loadData();
+    });
+
+    document.getElementById("refresh-btn")?.addEventListener("click", loadData);
+
+    populateDays();
+    const link = document.getElementById("download-json");
+    if (link) {
+      link.href = `/at-risk?days=${encodeURIComponent(state.filters.days)}`;
+    }
+    renderMeta();
+    renderSummary();
+    loadData();
   </script>
 </body>
 </html>
