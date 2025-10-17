@@ -66,6 +66,24 @@ The summary CSV now mirrors the data sent to Odoo with per-product `list_price`,
 offline fixtures so that demo scenarios start with realistic carrying costs and
 inventory positions.
 
+Behind the scenes each category has a profile in `scripts/seed_inventory.py`
+(`CATEGORY_PROFILES`) that drives the maths:
+- `list_price` is the merchandising price from the catalog; `unit_cost` applies
+  the category’s wholesale factor (e.g. Produce ≈ 58 % of retail) with slight
+  per-item variance, and `average_cost` tweaks that cost by a small adjustment
+  so it remains within a realistic band.
+- `quantity_on_hand` starts from a per-category baseline (higher for Center
+  Store, lower for Deli), then scales to match any explicit quantity supplied in
+  the catalog. `backroom_qty` and `sales_floor_qty` are a bounded ratio split so
+  the sum always equals `quantity_on_hand`.
+- During seeding the script writes those quantities directly onto each
+  `stock.quant` under `inventory_mode`, which is the same mechanism Odoo uses
+  for inventory adjustments. That guarantees the “On Hand” and valuation fields
+  you see in the UI align with the summary CSV.
+
+See `docs/inventory_seed.md` for a plain-language glossary covering these terms
+and examples of how each figure is calculated.
+
 ### Seeding staff accounts
 
 Provision demo staff users with predefined roles and group memberships:

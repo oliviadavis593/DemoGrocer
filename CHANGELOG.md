@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ## [0.4.1] - 2025-10-16
 ### Added
 - Richer product catalog metadata powering the seeding flow, including realistic quantity on hand splits, wholesale unit costs, and average cost baselines replicated across Odoo and offline fixtures.
+- Inventory seeding glossary at `docs/inventory_seed.md` covering terminology, cost math, and how quantities are applied in Odoo.
 
 ### Changed
 - Inventory seed script now adjusts stock quants in inventory mode so Odoo reflects the new on-hand quantities immediately, and README highlights the expanded cost/quantity summary written to `out/seed_summary.csv`.

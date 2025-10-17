@@ -631,49 +631,6 @@ class InventorySeeder:
         record_id = self.client.create("stock.quant", create_values, context=context)
         return record_id
 
-    def _ensure_inventory_adjustment(self, location_id: int) -> int:
-        inventory_id = self.inventory_adjustments.get(location_id)
-        if inventory_id is not None:
-            return inventory_id
-        location_name = self.location_names.get(location_id)
-        if location_name is None:
-            record = self.client.search_read(
-                "stock.location",
-                domain=[("id", "=", location_id)],
-                fields=["name"],
-                limit=1,
-            )
-            location_name = str(record[0]["name"]) if record else f"Location {location_id}"
-            self.location_names[location_id] = location_name
-        values = {
-            "name": f"FoodFlow Seed ({location_name})",
-            "location_ids": [(6, 0, [location_id])],
-            "prefill_counted_quantity": "zero",
-        }
-        inventory_id = self.client.create("stock.inventory", values)
-        self.inventory_adjustments[location_id] = inventory_id
-        return inventory_id
-
-    def _resolve_product_uom(self, product_id: int, uom_key: Optional[str] = None) -> int:
-        cached = self.product_uoms.get(product_id)
-        if cached:
-            return cached
-        if uom_key and uom_key in self.uoms:
-            uom_id = self.uoms[uom_key]
-            self.product_uoms[product_id] = uom_id
-            return uom_id
-        records = self.client.call(
-            "product.product",
-            "read",
-            [[product_id], ["uom_id"]],
-        )
-        if records:
-            uom_id = self._extract_many2one_id(records[0].get("uom_id"))
-            if uom_id:
-                self.product_uoms[product_id] = uom_id
-                return uom_id
-        raise OdooClientError(f"Unable to resolve unit of measure for product {product_id}.")
-
     # Generic helpers ------------------------------------------------------------
     def _upsert_single(self, model: str, domain: Sequence[object], values: Dict[str, object]) -> int:
         records = self.client.search_read(model, domain=domain, fields=["id"], limit=1)
