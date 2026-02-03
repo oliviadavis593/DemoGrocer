@@ -1,8 +1,8 @@
-# FoodFlow
+# DemoGrocer
 
 ## Overview
 
-FoodFlow is a developer sandbox that showcases how an Odoo-backed grocery retailer could seed, simulate, and monitor inventory data end to end. The repository includes:
+DemoGrocer is a developer sandbox that showcases how an Odoo-backed grocery retailer could seed, simulate, and monitor inventory data end to end. The repository includes:
 - Staff seeding utilities that provision demo user accounts with pre-configured roles for store workflows.
 - Inventory seeding utilities that provision demo products, lots, and stock levels in Odoo.
 - A simulator that applies daily sales, expiry, and receiving patterns while logging events to JSONL and SQLite.
@@ -99,7 +99,7 @@ The script creates cashier, department manager, and store manager accounts, assi
 
 ### Demo fixtures & synthetic movements
 
-When running FoodFlow without a live Odoo instance you can rely on the new demo helpers to keep tutorials and prototypes grounded in realistic data.
+When running DemoGrocer without a live Odoo instance you can rely on the new demo helpers to keep tutorials and prototypes grounded in realistic data.
 
 ```python
 from datetime import date
@@ -128,7 +128,7 @@ Common workflows are available as single-command Make targets:
 
 ```bash
 make diagnose
-# DB name: foodflow
+# DB name: demogrocer
 # stock.lot present: true
 # life_date present: true
 
@@ -169,14 +169,14 @@ make labels-demo
 # - FF101: out/labels/FF101.pdf (found)
 
 make web
-# INFO 2024-01-10 12:00:00,000 INFO Starting FoodFlow web server on http://0.0.0.0:8000
+# INFO 2024-01-10 12:00:00,000 INFO Starting DemoGrocer web server on http://0.0.0.0:8000
 ```
 
 Each command maps to a common developer workflow:
 - `make diagnose` authenticates to Odoo and prints the database name plus capability checks for the `stock.lot` model and `life_date` field.
 - `make seed` provisions demo inventory data inside Odoo and summarizes the number of products created.
 - `make seed-staff` syncs demo cashier, department manager, and store manager accounts and records their credentials under `.out/staff_credentials.json`.
-- `make simulate` runs one simulator cycle, appending sell-down, returns, shrink, expiry, receiving, and analysis flag events to `out/events.jsonl` while persisting everything to `out/foodflow.db`.
+- `make simulate` runs one simulator cycle, appending sell-down, returns, shrink, expiry, receiving, and analysis flag events to `out/events.jsonl` while persisting everything to `out/demogrocer.db`.
 - `make simulate-start` launches the background scheduler for continuous simulation until you stop it.
 - `make integration-sync` authenticates with Odoo using the new integration service and logs a summary of on-hand inventory fetched during the cycle.
 - `PYTHONPATH=. python3 services/integration/runner.py snapshot --summary-limit 5` prints the current inventory count plus a few representative rows (product, lot, quantity, locations, expiry) without running the full sync automation.
@@ -191,7 +191,7 @@ Each command maps to a common developer workflow:
 - Visit `http://localhost:8000/dashboard/flagged` after `make web` to review flagged decisions with store/category/reason filters and kick off bulk label generation via `/labels/markdown`.
 
 `make simulate` and `make simulate-start` automatically migrate the local SQLite
-database so events are stored in `out/foodflow.db`. After a run you can spot-check the new activity with:
+database so events are stored in `out/demogrocer.db`. After a run you can spot-check the new activity with:
 
 ```bash
 tail -n 50 out/events.jsonl | grep -E '"type":"(returns|shrink|flag_low_movement|flag_overstock)"' | head
@@ -306,7 +306,7 @@ Example requests:
 
 ```bash
 curl -s http://localhost:8000/
-# {"app":"FoodFlow reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","metrics_last_sync":"/metrics/last_sync","metrics_impact":"/metrics/impact","at_risk":"/at-risk","flagged":"/flagged","dashboard_flagged":"/dashboard/flagged","dashboard_at_risk":"/dashboard/at-risk","labels_markdown":"/labels/markdown","labels_index":"/out/labels/","flagged_export":"/export/flagged.csv","events_export":"/export/events.csv","compliance_events":"/compliance/events","compliance_export":"/compliance/export.csv"},"docs":"See README.md for curl examples and Make targets."}
+# {"app":"DemoGrocer reporting API","status":"ok","links":{"health":"/health","events_recent":"/events/recent","events":"/events","metrics_summary":"/metrics/summary","metrics_last_sync":"/metrics/last_sync","metrics_impact":"/metrics/impact","at_risk":"/at-risk","flagged":"/flagged","dashboard_flagged":"/dashboard/flagged","dashboard_at_risk":"/dashboard/at-risk","labels_markdown":"/labels/markdown","labels_index":"/out/labels/","flagged_export":"/export/flagged.csv","events_export":"/export/events.csv","compliance_events":"/compliance/events","compliance_export":"/compliance/export.csv"},"docs":"See README.md for curl examples and Make targets."}
 
 curl -s http://localhost:8000/health
 # {"status":"ok"}
@@ -377,7 +377,7 @@ metadata (for example `{"reason": "no_life_date_field"}`) instead of erroring.
 
 #### CSV exports
 
-- `/export/flagged.csv` emits `default_code, product, lot, reason, outcome, suggested_qty, quantity, unit, price_markdown_pct, store, stores, category, notes`. Query parameters `store`, `category`, and `reason` mirror the JSON endpoint and the response defaults to UTF-8 with a BOM so Excel opens the file without manual encoding tweaks. When either `FOODFLOW_WEB_API_KEY` or `FOODFLOW_API_KEY` is set you must add `?api_key=...` (or include the same in your query parameters) or the service will reply with `401 Unauthorized`.
+- `/export/flagged.csv` emits `default_code, product, lot, reason, outcome, suggested_qty, quantity, unit, price_markdown_pct, store, stores, category, notes`. Query parameters `store`, `category`, and `reason` mirror the JSON endpoint and the response defaults to UTF-8 with a BOM so Excel opens the file without manual encoding tweaks. When either `DEMOGROCER_WEB_API_KEY` or `DEMOGROCER_API_KEY` is set you must add `?api_key=...` (or include the same in your query parameters) or the service will reply with `401 Unauthorized`.
 - `/export/events.csv` shares the JSON filters (`limit`, `type`, `since`) and produces `timestamp, type, product, lot, quantity, before_quantity, after_quantity, source`. The same optional API key guard applies, so append `api_key` when the environment variable is configured.
 
 ### Tests
